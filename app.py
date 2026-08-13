@@ -1298,7 +1298,6 @@ st.markdown("""
 <div class="hero-section">
     <div class="hero-eyebrow">Legal Intelligence Platform</div>
     <div class="hero-title">Crime Scene<br><span class="highlight">Investigation</span> RAG</div>
-    <div class="hero-sub">// AI-Assisted Case Research &amp; Evidence Analysis</div>
 </div>
 """, unsafe_allow_html=True)
 
