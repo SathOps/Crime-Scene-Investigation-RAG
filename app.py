@@ -407,11 +407,12 @@ html, body, .stApp, [data-testid="stAppViewContainer"],
 .hero-title {
     position: relative; z-index: 1;
     font-family: var(--font-sans);
-    font-size: 2.4rem;
+    font-size: 3.2rem;
     font-weight: 800;
-    line-height: 1.15;
+    line-height: 1.1;
     color: var(--text-primary);
     margin-bottom: 8px;
+    white-space: nowrap;
 }
 .hero-title .highlight {
     color: var(--blue-bright);
@@ -1297,7 +1298,7 @@ st.markdown(f"""
 st.markdown("""
 <div class="hero-section">
     <div class="hero-eyebrow">Legal Intelligence Platform</div>
-    <div class="hero-title">Crime Scene<br><span class="highlight">Investigation</span> RAG</div>
+    <div class="hero-title">Crime Scene <span class="highlight">Investigation</span> RAG</div>
 </div>
 """, unsafe_allow_html=True)
 
