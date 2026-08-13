@@ -546,18 +546,24 @@ html, body, .stApp, [data-testid="stAppViewContainer"],
 }
 .prompt-title {
     font-family: var(--font-mono);
-    font-size: 0.72rem;
+    font-size: 0.7rem;
     font-weight: 600;
     color: var(--text-primary);
     text-transform: uppercase;
-    letter-spacing: 0.06em;
+    letter-spacing: 0.04em;
     margin-bottom: 4px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
 .prompt-desc {
     font-family: var(--font-sans);
-    font-size: 0.7rem;
+    font-size: 0.65rem;
     color: var(--text-muted);
-    line-height: 1.4;
+    line-height: 1.3;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
 
 /* ── COMMAND INPUT ────────────────────────── */
