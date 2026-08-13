@@ -1,0 +1,41 @@
+IN THE SESSIONS COURT OF PUNE, AT PUNE, MAHARASHTRA
+SESSIONS CASE NO. 312 OF 2024
+(Arising out of FIR No. 142/2024, Shivajinagar Police Station)
+
+State of Maharashtra  ... Prosecution
+       Versus
+Ramesh Kumar          ... Accused / Defendant
+
+Presiding Judge: Hon'ble Sessions Judge M. V. Kulkarni, B.Sc., LL.M.
+Date of Pronouncement of Judgment: 10th January 2025
+
+JUDGMENT & FINAL ORDER:
+
+1. Prosecution Case Summary:
+   The prosecution alleged that accused Ramesh Kumar murdered victim Vikram Malhotra, MD of Apex Logistics Pvt. Ltd., on 13th November 2024 between 21:15 HRS and 21:35 HRS in Office #402, Apex Towers, Shivajinagar, Pune, by firing a 9mm pistol at close range, and robbed a briefcase containing financial audit ledgers to suppress evidence of his INR 45 Lakhs embezzlement.
+
+2. Evaluation of Defense Alibi:
+   The accused pleaded an alibi under Section 11 of the Indian Evidence Act, claiming presence at Blue Dart Cafe in Aundh from 20:45 HRS to 22:15 HRS on the night of the crime.
+   Court Finding: The defense of alibi is rejected in toto. Prosecution produced Cell Tower CDR evidence (Shivajinagar-BS-04) proving accused's phone was active at Shivajinagar during the crime window. Further, CCTV gait analysis (87.4% match) and testimony of Blue Dart Cafe manager confirmed accused was NOT present at the cafe.
+
+3. Evaluation of Witness Statements & Contradictions:
+   Court examined the contradiction between Security Guard Ankit Sharma (stating accused entered rear gate at 21:08 HRS in a navy blue hoodie) and Senior Accountant Priya Nair (stating she saw accused at front gate at 21:15 HRS in a red jacket).
+   Court Finding: CCTV Camera 01 and Camera 02 conclusive video logs corroborate Security Guard Ankit Sharma's timeline and hoodie description. Priya Nair's observation at front gate was unsupported by video evidence and constitutes an honest error in timing or identity. Minor discrepancy does not shake the core prosecution narrative.
+
+4. Scientific & Forensic Evidence:
+   - Gunshot Residue (GSR) test confirmed Lead, Barium, and Antimony on accused's right hand.
+   - Footwear impression Item-B matched Chevron sole sneakers (Item-H) seized from accused's house.
+   - Fingerprint FP-8821 on victim's desk drawer matched accused's right index finger (12 ridge points).
+   - Postmortem report PM-894/2024 established Time of Death between 21:15 HRS and 21:35 HRS, perfectly aligning with CCTV exit timestamp (21:39 HRS).
+
+5. FINAL VERDICT & SENTENCE:
+   The Court holds that the prosecution has established the chain of circumstantial and scientific evidence beyond all reasonable doubt.
+
+   ORDER:
+   i. Accused Ramesh Kumar is hereby CONVICTED of the offence punishable under IPC Section 302 (Murder) and IPC Section 392 (Robbery).
+   ii. For offence under IPC Section 302, Accused Ramesh Kumar is sentenced to IMPRISONMENT FOR LIFE and to pay a fine of INR 50,000.
+   iii. For offence under IPC Section 392, Accused Ramesh Kumar is sentenced to RIGOROUS IMPRISONMENT FOR 7 YEARS and fine of INR 10,000.
+   iv. Both sentences to run concurrently.
+
+Pronounced in Open Court on this 10th day of January 2025.
+Signed: (M. V. Kulkarni) Sessions Judge, Pune.

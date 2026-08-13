@@ -1,0 +1,33 @@
+POLICE INVESTIGATION & CHARGE SHEET SUMMARY
+Office of the Assistant Commissioner of Police, Shivajinagar Division, Pune City
+Charge Sheet No.: CS/142/2024
+Date of Filing: 1st December 2024
+Investigating Officer: Inspector Rajesh Deshmukh, Senior PI, Shivajinagar PS
+
+SUMMARY OF INVESTIGATION & EVIDENCE SYNTHESIS:
+
+1. Establishment of Motive:
+   Investigating agency established that accused Ramesh Kumar was employed as Senior Accountant at Apex Logistics Pvt. Ltd. Internal audit revealed that Ramesh had systematically embezzled INR 45 Lakhs over 14 months into shell bank accounts under his brother-in-law's name. Deceased MD Vikram Malhotra discovered the fraud on 30th October 2024, terminated Ramesh, and demanded full restitution by 15th November 2024 under threat of police filing. This provided direct malice and motive for murder.
+
+2. Timeline & Reconstructing the Crime (13th November 2024):
+   - 20:30 HRS: Victim Vikram Malhotra arrives at Office #402.
+   - 21:04 HRS: Accused Ramesh Kumar arrives in Shivajinagar area. Cell Tower CDR logs show his mobile number 98230-77123 connected to Tower Shivajinagar-BS-04.
+   - 21:08 HRS: Ramesh enters Apex Towers via rear service gate in a navy hoodie (CCTV Cam 01).
+   - 21:12 HRS: Ramesh disables 4th floor corridor CCTV power cable.
+   - 21:15 - 21:30 HRS: Ramesh enters Office #402, confrontations ensue. Ramesh shoots Malhotra in chest at close range with an unlicensed 9mm pistol, steals the briefcase containing audit ledgers (Evidence Item-E).
+   - 21:39 HRS: Ramesh exits rear gate carrying stolen briefcase (CCTV Cam 01).
+   - 21:48 HRS: Ramesh leaves Shivajinagar cell tower zone.
+
+3. Call Detail Records (CDR) & Cell Tower Dump Analysis:
+   - Handset IMEI #358912094410210 / Mobile No. 98230-77123 belonging to Ramesh Kumar registered active cell tower handovers:
+     - 20:40 HRS: Kothrud Cell Tower (Residence)
+     - 21:04 HRS to 21:48 HRS: Shivajinagar-BS-04 (Apex Towers vicinity)
+     - 22:15 HRS: Kothrud Cell Tower (Residence)
+   - This CDR record completely disproves Ramesh Kumar's claim of being in Aundh at Blue Dart Cafe (which is serviced by Aundh-BS-12 cell tower).
+
+4. Resolution of Witness Statement Contradictions:
+   - Witness Priya Nair's claim of seeing Ramesh outside front gate at 21:15 HRS in a bright red leather jacket was investigated. CCTV Camera 02 footage verified no person in a red jacket was present. Tower CDR and Guard Ankit Sharma's statement confirmed Ramesh entered via rear gate at 21:08 HRS wearing a navy hoodie. Nair's observation was determined to be a factual error or mistaken identity.
+
+5. Final Charge: Accused Ramesh Kumar charged under Sections 302 (Murder) and 392 (Robbery) IPC.
+
+Submitted By: Inspector Rajesh Deshmukh, PI Shivajinagar PS.

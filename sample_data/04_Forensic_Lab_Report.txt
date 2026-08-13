@@ -1,0 +1,36 @@
+STATE FORENSIC SCIENCE LABORATORY (SFSL) REPORT
+Regional Center: Ganeshkhind, Pune, Maharashtra
+Report No.: SFSL/BALLISTICS/2024/7821
+Date of Issue: 18th November 2024
+Case Reference: FIR No. 142/2024, Shivajinagar PS (State vs. Ramesh Kumar)
+
+EVIDENCE ITEMS SUBMITTED FOR ANALYSIS:
+- Evidence Item-A: 9mm Spent Brass Shell Casing recovered from Office #402 floor.
+- Evidence Item-B: Plaster Cast Impression & Digital Photo of Bloody Footprint on Office #402 tiles.
+- Evidence Item-C: Silver Metallic Titan Chrono Wristwatch (Model T-804) with blood smears.
+- Evidence Item-F: Latent Fingerprint Lifts (FP-8821) from Office #402 executive desk and door handle.
+- Evidence Item-G: Dermal Nitrate GSR Swab taken from suspect Ramesh Kumar on 14-Nov-2024 at 07:00 HRS.
+- Item-H: Pair of Black Chevron-soled Sneakers (Size 9) seized from Ramesh Kumar's residence.
+
+LABORATORY FINDINGS:
+
+1. Ballistics Examination (Item-A):
+   - Item-A is a standard 9mm Parabellum spent brass cartridge case bearing firing pin impression 'FPI-9M'.
+   - Microscopic comparison against 9mm bullet recovered from victim's thoracic cavity during autopsy confirms both bullet and casing were fired from the same semi-automatic firearm. Firing pin striation characteristics indicate a 9mm pistol weapon.
+
+2. Fingerprint Analysis (Dactyloscopy - Item-F):
+   - Latent fingerprint FP-8821 lifted from the right drawer handle of the executive desk in Office #402 was developed using black magnetic powder.
+   - Automated Fingerprint Identification System (AFIS) database comparison with ten-print card of Ramesh Kumar revealed 12 identical ridge characteristics (bifurcations, ridge endings, and dots) matching the right index finger of Ramesh Kumar.
+
+3. Footwear Impression Analysis (Item-B vs. Item-H):
+   - The bloody footwear impression (Item-B) recovered from the scene exhibits a Size 9 (European 43) Chevron wave sole pattern with distinctive heel wear on the outer lateral edge.
+   - Comparative examination against black sneakers (Item-H) seized from Ramesh Kumar's residence confirmed 100% morphological match in tread pattern, dimensions, and individual wear marks.
+
+4. Gunshot Residue (GSR) Test (Item-G):
+   - Atomic Absorption Spectroscopy (AAS) analysis of dermal swabs (Item-G) taken from Ramesh Kumar's right palm and index finger tested POSITIVE for elevated levels of Lead (Pb), Barium (Ba), and Antimony (Sb).
+   - Conclusion: The chemical profile is characteristic of primer residue resulting from firing a firearm within 12 to 18 hours prior to sample collection.
+
+5. Serology & DNA Profiling (Item-C):
+   - Blood sample extracted from Titan Wristwatch (Item-C) yielded a single-source DNA profile matching victim Vikram Malhotra (Probability of match: 1 in 4.2 Billion).
+
+Chief Forensic Examiner: Dr. S. R. Thorne, Director of Forensic Ballistics & Fingerprints, SFSL Pune.

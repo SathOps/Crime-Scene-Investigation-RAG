@@ -1,0 +1,30 @@
+DIGITAL FORENSIC & CCTV ANALYSIS REPORT
+Department: Cyber Crime & Digital Forensics Unit, Pune City Police
+Requisition Ref: FIR No. 142/2024 (Shivajinagar PS)
+Report Date: 17th November 2024
+Examined Asset: Hard Drive DVR Unit (Western Digital 2TB, Serial #WD-9941X) — Evidence Item-D
+Seized From: Security Control Room, Apex Towers, Shivajinagar, Pune
+
+EXAMINATION FINDINGS & TIMELINE RECONSTRUCTION:
+
+1. Camera 01 — Rear Service Entrance & Emergency Stairwell Exit:
+   - Timestamp 21:08:12 HRS (13-Nov-2024):
+     A male individual matching the height (approx. 5ft 10in) and physical build of suspect Ramesh Kumar is captured entering through the rear service gate. The individual is clad in a dark navy blue hooded sweatshirt with the hood pulled over his head, dark trousers, and black footwear.
+   - Timestamp 21:39:45 HRS (13-Nov-2024):
+     The same male individual in the dark navy blue hooded sweatshirt is captured hurriedly exiting the rear service emergency stairwell door. He is carrying a black rectangular leather briefcase (matching missing Evidence Item-E) in his right hand.
+
+2. Camera 02 — Main Front Entrance Gate:
+   - Timestamp 21:14:50 HRS (13-Nov-2024):
+     Witness Ms. Priya Nair is recorded exiting the main glass doors of Apex Towers and walking toward the street bus stop.
+   - Discrepancy Verification (Priya Nair Statement):
+     Detailed frame-by-frame examination of Camera 02 footage between 21:00 HRS and 21:30 HRS shows NO person wearing a red leather jacket standing outside or near the front gate. The claim made by Witness Priya Nair regarding observing Ramesh Kumar in a bright red jacket at the front entrance at 21:15 HRS is factually unsupported by video evidence.
+
+3. Camera 03 — 4th Floor Corridor (Outside Office #402):
+   - Timestamp 21:12:00 HRS to 21:45:00 HRS (13-Nov-2024):
+     Video stream registered a power drop signal at 21:12:00 HRS, resulting in black video recording until manual cable reconnect at 21:45:00 HRS. Forensic log verification indicates physical disconnection of power cord at 4th floor junction box.
+
+4. Biometric Gait Analysis & Comparison:
+   - Gait parameters extracted from Camera 01 (rear service gate, 21:08:12 HRS) were compared against baseline reference video of Ramesh Kumar recorded during police custody.
+   - Result: Structural Gait Analysis yielded an 87.4% positive match score (Stride Length: 74cm, Cadence: 112 steps/min, Left arm swing angle deviation).
+
+Report Compiled By: Dr. A. K. Deshpande, Senior Forensic Scientist, Cyber Forensics Lab, Pune.
