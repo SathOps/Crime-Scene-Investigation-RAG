@@ -251,7 +251,44 @@ Multi-Agent Swarm (Not Required / Not Implemented)
 
 ---
 
-## 9. System Architecture Diagram
+## 9. Agentic Tool Calling Architecture (Advanced Experiment 6B Integration)
+
+The platform is upgraded with a dynamic **LangChain Tool-Calling Architecture**. Instead of relying on hardcoded keyword routing or rigid if-else blocks (such as `if "attendance" in question`), the system uses LLM tool binding (`llm.bind_tools(tools)`). The LLM dynamically inspects query requirements, selects the appropriate tool, generates arguments, receives execution results via `ToolMessage`, and synthesizes a grounded answer.
+
+```mermaid
+flowchart TD
+    A[User Question] --> B[Router / Intent Classification]
+    B --> C[LegalResearchAgent]
+    C --> D[LLM with Bound Tools - llm.bind_tools]
+    D --> E{Tool Required?}
+
+    E -->|No| F[Direct Response / JSON Generation]
+    E -->|Yes| G[Select Tool from TOOLS_BY_NAME]
+    G --> H[Execute Tool Action]
+    H --> I[Capture Result in ToolMessage]
+    I --> D
+    F --> J[Pydantic Schema Validation - LegalResearchAnswer]
+    J --> K[Streamlit UI + Session State]
+```
+
+### Key Architectural Concepts:
+1. **What a Tool is**: A decorated Python function (`@tool` from `langchain_core.tools`) with type annotations and precise docstrings explaining when and how it should be used.
+2. **Why the Project uses Tools**: Allows the LLM to autonomously trigger RAG retrieval (`retrieve_case_evidence`), timeline extraction (`extract_timeline_events`), witness contradiction cross-examination (`analyze_witness_contradictions`), or FIR summaries (`summarize_case_facts`) based on query intent.
+3. **How `@tool` Works**: Converts standard functions into LangChain-compatible JSON schema objects exposed to the chat model.
+4. **Tool Registration**: Registered in `agent/tools.py` in `LEGAL_TOOLS` and indexed in `TOOLS_BY_NAME`.
+5. **How `bind_tools()` Works**: Attaches tool JSON schemas directly to `ChatOllama` / `ChatOpenAI` chat models so the LLM outputs `response.tool_calls`.
+6. **How the LLM Selects a Tool**: The LLM reads the system prompt and tool descriptions to select tools dynamically without hardcoded keyword rules.
+7. **Tool Execution Loop**: `LegalResearchAgent` iterates up to `MAX_TOOL_ITERATIONS = 5`:
+   - Inspects `response.tool_calls`
+   - Maps `tool_name` to `TOOLS_BY_NAME`
+   - Executes the tool with `tool_args`
+   - Returns a `ToolMessage(content=result, tool_call_id=tool_id)` to the message history
+8. **Error Handling**: Graceful fallback handling for unknown tools or execution failures without exposing raw stack traces to the user.
+9. **UI Visualization**: Streamlit dashboard features an expandable **EXECUTED AGENT TOOLS** card showing invoked tool names, arguments, execution status, and result previews.
+
+---
+
+## 10. System Architecture Diagram
 
 ```mermaid
 flowchart TD
