@@ -264,7 +264,20 @@ flowchart TD
 
     E -->|No| F[Direct Response / JSON Generation]
     E -->|Yes| G[Select Tool from TOOLS_BY_NAME]
-    G --> H[Execute Tool Action]
+    
+    subgraph Registered LangChain Tools
+        G --> T1[retrieve_case_evidence - RAG Tool]
+        G --> T2[extract_timeline_events]
+        G --> T3[analyze_witness_contradictions]
+        G --> T4[summarize_case_facts]
+        T1 --> VectorStore[(ChromaDB Vector Store)]
+    end
+
+    T1 --> H[Execute Selected Tool Action]
+    T2 --> H
+    T3 --> H
+    T4 --> H
+
     H --> I[Capture Result in ToolMessage]
     I --> D
     F --> J[Pydantic Schema Validation - LegalResearchAnswer]
@@ -274,7 +287,7 @@ flowchart TD
 ### Key Architectural Concepts:
 1. **What a Tool is**: A decorated Python function (`@tool` from `langchain_core.tools`) with type annotations and precise docstrings explaining when and how it should be used.
 2. **Why the Project uses Tools**: Allows the LLM to autonomously trigger RAG retrieval (`retrieve_case_evidence`), timeline extraction (`extract_timeline_events`), witness contradiction cross-examination (`analyze_witness_contradictions`), or FIR summaries (`summarize_case_facts`) based on query intent.
-3. **How `@tool` Works**: Converts standard functions into LangChain-compatible JSON schema objects exposed to the chat model.
+3. **RAG as a Tool**: `retrieve_case_evidence` exposes the persistent ChromaDB RAG vector store directly as an LLM tool. When context is needed, the model calls this tool dynamically.
 4. **Tool Registration**: Registered in `agent/tools.py` in `LEGAL_TOOLS` and indexed in `TOOLS_BY_NAME`.
 5. **How `bind_tools()` Works**: Attaches tool JSON schemas directly to `ChatOllama` / `ChatOpenAI` chat models so the LLM outputs `response.tool_calls`.
 6. **How the LLM Selects a Tool**: The LLM reads the system prompt and tool descriptions to select tools dynamically without hardcoded keyword rules.
@@ -295,9 +308,11 @@ flowchart TD
     User([User Query]) --> UI[Streamlit UI - app.py]
     UI --> Agent[LegalResearchAgent - Single Agent Orchestrator]
     
-    subgraph Agentic Orchestration Pipeline
+    subgraph Agentic Orchestration & Tool Pipeline
         Agent --> Intent[Intent Classification]
-        Intent --> Ret[RAGRetriever]
+        Agent --> Tools[LLM Tool Binding - llm.bind_tools]
+        Tools --> RAGTool[retrieve_case_evidence - RAG Tool]
+        RAGTool --> Ret[RAGRetriever]
         Ret --> VectorStore[(ChromaDB Vector Store)]
         VectorStore --> Chunks[Top-K Evidence Chunks]
         Chunks --> Prompt[LangChain ChatPromptTemplate]
@@ -315,7 +330,7 @@ flowchart TD
 
 ---
 
-## 10. Directory & File Structure
+## 11. Directory & File Structure
 
 ```text
 RAG Agentic Ai/
