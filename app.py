@@ -1589,6 +1589,21 @@ with tab_research:
                     </div>
                     """, unsafe_allow_html=True)
 
+        # ─── EXECUTED TOOLS LOG ───────────────
+        if getattr(state, "executed_tools", None):
+            with st.expander(f"EXECUTED AGENT TOOLS  [{len(state.executed_tools)} tools invoked]"):
+                for tool_item in state.executed_tools:
+                    st.markdown(f"""
+                    <div class="source-card" style="border-left: 3px solid var(--blue-bright);">
+                        <div class="source-top">
+                            <span class="source-id" style="color:var(--blue-glow); font-weight:700;">Tool: {tool_item.tool_name}</span>
+                            <span class="command-tag active">{tool_item.status.upper()}</span>
+                        </div>
+                        <div class="source-name" style="margin-top:6px; font-family:var(--font-mono); font-size:0.75rem;">Arguments: {json.dumps(tool_item.tool_args)}</div>
+                        <div class="source-excerpt" style="margin-top:4px;">Result Preview: {tool_item.result_preview}</div>
+                    </div>
+                    """, unsafe_allow_html=True)
+
         # ─── WORKFLOW LOG ─────────────────────
         with st.expander("AGENT WORKFLOW LOG"):
             st.markdown('<div class="section-label">Research Plan</div>', unsafe_allow_html=True)
