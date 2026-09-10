@@ -60,17 +60,36 @@ class DocumentChunk:
         }
 
 @dataclass
+class ToolExecution:
+    tool_name: str
+    tool_args: Dict[str, Any]
+    status: str  # "completed", "failed"
+    result_preview: str = ""
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "tool_name": self.tool_name,
+            "tool_args": self.tool_args,
+            "status": self.status,
+            "result_preview": self.result_preview
+        }
+
+@dataclass
 class WorkflowStep:
     step_name: str
     status: str  # "pending", "in_progress", "completed", "failed"
     detail: str = ""
+    tool_execution: Optional[ToolExecution] = None
 
     def to_dict(self) -> Dict[str, Any]:
-        return {
+        d = {
             "step_name": self.step_name,
             "status": self.status,
             "detail": self.detail
         }
+        if self.tool_execution:
+            d["tool_execution"] = self.tool_execution.to_dict()
+        return d
 
 @dataclass
 class WorkflowState:
@@ -85,6 +104,7 @@ class WorkflowState:
     raw_model_response: str = ""
     validation_error: str = ""
     sources: List[Dict[str, Any]] = field(default_factory=list)
+    executed_tools: List[ToolExecution] = field(default_factory=list)
     status: str = "Idle"
 
     def to_dict(self) -> Dict[str, Any]:
@@ -100,5 +120,7 @@ class WorkflowState:
             "raw_model_response": self.raw_model_response,
             "validation_error": self.validation_error,
             "sources": self.sources,
+            "executed_tools": [t.to_dict() for t in self.executed_tools],
             "status": self.status
         }
+
