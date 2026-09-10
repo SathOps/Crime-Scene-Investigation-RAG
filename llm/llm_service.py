@@ -19,6 +19,31 @@ class LLMService:
         self.api_key = api_key
         self.base_url = base_url or OLLAMA_BASE_URL
 
+    def get_chat_model(self):
+        """Returns a LangChain compatible Chat model instance based on active provider configuration."""
+        if self.provider == "ollama":
+            from langchain_ollama import ChatOllama
+            return ChatOllama(
+                model=self.model_name,
+                base_url=self.base_url,
+                temperature=0.1
+            )
+        elif self.provider == "openai" and self.api_key:
+            from langchain_openai import ChatOpenAI
+            return ChatOpenAI(
+                model=self.model_name or "gpt-4o",
+                api_key=self.api_key,
+                temperature=0.1
+            )
+        else:
+            # Default to Ollama fallback instance
+            from langchain_ollama import ChatOllama
+            return ChatOllama(
+                model=self.model_name,
+                base_url=self.base_url,
+                temperature=0.1
+            )
+
     @staticmethod
     def check_ollama_status(target_model: str = OLLAMA_MODEL) -> Tuple[bool, str]:
         """Check if local Ollama server is running and accessible and if target model exists."""
