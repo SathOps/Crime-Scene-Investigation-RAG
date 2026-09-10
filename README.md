@@ -4,26 +4,30 @@ An advanced, AI-powered **Single-Agent RAG (Retrieval-Augmented Generation)** ap
 
 Upgraded with **Experiment 3 (LangChain + Multi-Provider LLM Integration)** and **Experiment 4 (Structured Outputs + Pydantic Validation + Session State History & Premium Dark UI)**.
 
+> **Key Architectural Principle**: This system is built around **ONE central AI agent: `LegalResearchAgent`**. It is a single-agent system where `LegalResearchAgent` acts as the central orchestrator, coordinating intent classification, evidence retrieval, LLM reasoning, structured output generation, and Pydantic schema validation.
+
 Built with **Python + Streamlit**, following the **AgenticAI Learning Architecture**:
 
 ```text
-Streamlit Modern UI
+Streamlit UI
     ↓
 Python Backend
     ↓
-LangChain Framework
+LegalResearchAgent (Single Agent / Orchestrator)
+├── Intent Classification
+├── RAGRetriever
+│   └── ChromaDB Vector Store
+├── LangChain Prompt Construction
+│   └── ChatPromptTemplate
+├── LLMService
+│   ├── Ollama (qwen2.5)
+│   ├── Gemini
+│   └── OpenAI
+└── Pydantic Validation (LegalResearchAnswer & SourceModel)
     ↓
-Single Legal Research Agent
+WorkflowState
     ↓
-RAG Retriever (ChromaDB + Vector Store)
-    ↓
-Multi-LLM Support (Ollama qwen2.5 / Gemini / OpenAI)
-    ↓
-Structured JSON Generation
-    ↓
-Pydantic Validation (LegalResearchAnswer & SourceModel)
-    ↓
-Interactive Streamlit Cards & Session History
+Streamlit Result UI + Session History
 ```
 
 > **Disclaimer**: This system is an AI-assisted legal research tool. It provides information based on documents available in its knowledge base and does not constitute formal legal advice.
@@ -60,31 +64,221 @@ Interactive Streamlit Cards & Session History
 
 ---
 
-## 2. System Architecture
+## 2. Single-Agent Architecture
+
+The Crime Scene Investigation RAG system uses **exactly one AI agent**: `LegalResearchAgent`. It is **NOT** a multi-agent system or agent swarm.
+
+`LegalResearchAgent` acts as the central orchestrator/coordinator of the entire legal research workflow. Other modules in the codebase—such as `RAGRetriever`, `LLMService`, `VectorStoreManager`, `LegalTextSplitter`, and Pydantic schemas—are **supporting deterministic services and data structures**, not separate AI agents.
+
+```text
+User Query
+    ↓
+LegalResearchAgent (Central Coordinator)
+    ↓
+Intent Classification
+    ↓
+RAG Retrieval (RAGRetriever + ChromaDB)
+    ↓
+LLM Execution (LLMService via LangChain)
+    ↓
+Pydantic Validation (LegalResearchAnswer)
+    ↓
+Structured Legal Answer (WorkflowState)
+```
+
+---
+
+## 3. Role of LegalResearchAgent
+
+The `LegalResearchAgent` ([`agent/legal_research_agent.py`](file:///Users/sathwiknaag/Desktop/%20/Projects/RAG%20Agentic%20Ai/agent/legal_research_agent.py)) is the **brain and coordinator of the application**. Rather than directly implementing every operation itself, it orchestrates the workflow by delegating specialized tasks to supporting services.
+
+### Core Responsibilities:
+1. **Receives User Query**: Accepts raw legal research queries from the Streamlit UI.
+2. **Classifies Intent**: Determines query category (`CASE_SUMMARY`, `TIMELINE`, `WITNESS_ANALYSIS`, `CONTRADICTION_DETECTION`, etc.) using keyword heuristics and LLM prompt context.
+3. **Determines Workflow Strategy**: Chooses chunk retrieval limits ($Top-K$) and context formatting based on query intent.
+4. **Calls RAG Retriever**: Invokes `RAGRetriever` to pull relevant legal evidence chunks and relevance scores from ChromaDB.
+5. **Constructs Context & Prompt**: Passes retrieved evidence chunks and intent context to `legal_research_prompt.py` to build LangChain `ChatPromptTemplate` instances.
+6. **Invokes LLM Service**: Calls `LLMService` to execute inference across Ollama, Gemini, or OpenAI.
+7. **Receives Structured JSON**: Obtains JSON formatted output adhering to legal analysis guidelines.
+8. **Validates Output Schema**: Parses and validates raw JSON against the `LegalResearchAnswer` Pydantic model.
+9. **Handles Validation Failures**: Triggers fallback strategies or retry logs when output fails schema validation.
+10. **Returns Workflow State**: Packs structured answer, intent, source citations, and timing metrics into a `WorkflowState` object for `app.py`.
+11. **Enables UI Rendering**: Allows Streamlit to render structured cards and store active session state history.
+
+```text
+LegalResearchAgent
+├── Intent Classification
+├── Evidence Retrieval
+├── Prompt/Context Construction
+├── LLM Invocation
+├── Structured Output Validation
+└── Final Workflow State Assembly
+```
+
+---
+
+## 4. Agent Reasoning → Planning → Action Workflow
+
+The architecture implements a practical **Reasoning → Planning → Action → Validation → Response** agentic workflow loop:
+
+```text
+User Request: "What contradictions exist between witness statements and CCTV footage?"
+    ↓
+[Reasoning]
+Identify query intent as CONTRADICTION_DETECTION requiring comparison between witness statements and CCTV analysis reports.
+    ↓
+[Planning]
+Determine that relevant witness depositions and CCTV log chunks must be retrieved from ChromaDB, combined into context, and analyzed for timestamp/location discrepancies.
+    ↓
+[Action]
+Execute RAGRetriever query, obtain top-K evidence chunks, construct legal research prompt, and invoke selected LLM via LLMService.
+    ↓
+[Validation]
+Parse raw LLM output against Pydantic LegalResearchAnswer schema to ensure structured fields (grounded answer, key findings, evidence summary, limitations, sources) are present and valid.
+    ↓
+[Response]
+Return populated WorkflowState object to Streamlit app.py for interactive card rendering and session state tracking.
+```
+
+---
+
+## 5. Complete Query Execution Flow
+
+```text
+User Query
+    ↓
+app.py (Streamlit UI)
+    ↓
+LegalResearchAgent.run_workflow(query)
+    ↓
+Intent Classification (IntentType)
+    ↓
+RAGRetriever (Relevance scoring & filtering)
+    ↓
+VectorStoreManager / ChromaDB (Top-K vector lookup)
+    ↓
+Top-K Relevant Evidence Chunks
+    ↓
+legal_research_prompt.py (LangChain ChatPromptTemplate)
+    ↓
+LLMService (Unified manager for Ollama / Gemini / OpenAI)
+    ↓
+Ollama / Gemini / OpenAI LLM Inference
+    ↓
+Structured JSON Response
+    ↓
+LegalResearchAnswer Pydantic Schema Validation
+    ↓
+WorkflowState Object Assembly
+    ↓
+app.py (Render interactive UI cards & save to st.session_state)
+```
+
+### Flow Breakdown:
+1. **User Query Submission**: User submits a legal query via `app.py`.
+2. **Agent Entry Point**: `app.py` passes the query to `LegalResearchAgent.run_workflow(query)`.
+3. **Intent Classification**: Agent categorizes query intent (`CASE_SUMMARY`, `CONTRADICTION_DETECTION`, etc.).
+4. **Vector Retrieval**: `RAGRetriever` queries `VectorStoreManager` (ChromaDB) to fetch top-K evidence chunks.
+5. **Prompt Formatting**: `legal_research_prompt.py` formats chunks and query into a LangChain `ChatPromptTemplate`.
+6. **LLM Execution**: `LLMService` sends formatted prompt to active provider (Ollama, Gemini, or OpenAI).
+7. **Schema Validation**: Raw response is validated against Pydantic `LegalResearchAnswer` schema.
+8. **State Construction**: Agent encapsulates result, citations, and metadata into a `WorkflowState` object.
+9. **UI & History Rendering**: `app.py` renders interactive result cards, citation expanders, and session history logs.
+
+---
+
+## 6. Agent vs. Supporting Components
+
+| Component | Is it an Agent? | Responsibility |
+| :--- | :---: | :--- |
+| **`LegalResearchAgent`** | **YES — Single Agent** | Central orchestrator managing intent, retrieval, LLM call, validation, and state packaging. |
+| **`RAGRetriever`** | No | Performs similarity searches and calculates chunk relevance scores. |
+| **`VectorStoreManager`** | No | Manages persistent ChromaDB vector collections and embeddings index. |
+| **`EmbeddingService`** | No | Generates text vector embeddings via Sentence-Transformers / HuggingFace. |
+| **`LLMService`** | No | Provides unified multi-provider interface (Ollama, Gemini, OpenAI). |
+| **`LegalTextSplitter`** | No | Chunks legal documents respecting section boundaries and chunk overlaps. |
+| **`DocumentLoader`** | No | Extracts raw text and metadata from PDF, DOCX, and TXT legal files. |
+| **Pydantic Schemas** | No | Validates JSON structure (`LegalResearchAnswer`, `SourceModel`). |
+| **Streamlit `app.py`** | No | Web user interface, input forms, metric displays, and session history management. |
+
+---
+
+## 7. Concrete Example Execution
+
+### Example Query:
+> *"What contradictions exist between witness statements and CCTV footage regarding the timeline?"*
+
+```text
+1. User submits query in Streamlit interface.
+2. LegalResearchAgent receives query.
+3. Agent identifies intent -> CONTRADICTION_DETECTION.
+4. RAGRetriever searches ChromaDB collection for witness statements and CCTV log chunks.
+5. Relevant chunks (e.g., Security Guard Ankit Sharma's statement vs. CCTV Exit Log) are retrieved.
+6. LangChain prompt builder constructs legal research context prompt.
+7. Selected LLM (e.g., Ollama qwen2.5:1.5b) processes context and generates structured JSON response.
+8. Pydantic validates response against LegalResearchAnswer schema.
+9. Agent packages output into WorkflowState.
+10. Streamlit renders:
+    - Grounded Legal Answer (pointing out timestamp discrepancies)
+    - Key Findings (e.g., CCTV shows exit at 21:40 HRS vs. witness statement claiming 21:55 HRS)
+    - Evidence Breakdown (bulleted list of conflicting exhibits)
+    - Knowledge Base Limitations
+    - Verifiable Source Citations with document names and page numbers
+```
+
+---
+
+## 8. Why Single-Agent Architecture?
+
+The project deliberately adopts a **Single-Agent Architecture** because the application has one primary, focused objective: **legal research and evidence analysis across a case knowledge base**.
+
+A single central agent (`LegalResearchAgent`) can effectively coordinate multiple specialized software components (retriever, vector store, prompt templates, LLM service, Pydantic validator) without the overhead, latency, and non-deterministic behavior of multi-agent negotiation.
+
+```text
+Single Agent System (Implemented)
+    LegalResearchAgent
+           ↓
+   Coordinates Services
+ (Retriever, VectorStore, LLMService, Schemas)
+```
+
+*VS.*
+
+```text
+Multi-Agent Swarm (Not Required / Not Implemented)
+   Agent 1 (Search Agent) ➔ Agent 2 (Reasoning Agent) ➔ Agent 3 (Critic Agent)
+```
+
+---
+
+## 9. System Architecture Diagram
 
 ```mermaid
 flowchart TD
-    User([User Query]) --> UI[Streamlit UI - Dark Theme]
-    UI --> Agent[LegalResearchAgent]
+    User([User Query]) --> UI[Streamlit UI - app.py]
+    UI --> Agent[LegalResearchAgent - Single Agent Orchestrator]
     
-    subgraph LangChain & RAG Pipeline
-        Agent --> Prompt[LangChain ChatPromptTemplate]
-        Prompt --> Ret[RAGRetriever]
+    subgraph Agentic Orchestration Pipeline
+        Agent --> Intent[Intent Classification]
+        Intent --> Ret[RAGRetriever]
         Ret --> VectorStore[(ChromaDB Vector Store)]
         VectorStore --> Chunks[Top-K Evidence Chunks]
-        Chunks --> LLM[LLM Service: Ollama / Gemini / OpenAI]
+        Chunks --> Prompt[LangChain ChatPromptTemplate]
+        Prompt --> LLMService[LLMService Manager]
+        LLMService --> LLM[LLM Provider: Ollama / Gemini / OpenAI]
     end
 
     LLM --> JSON[Raw JSON Response]
     JSON --> Pydantic[Pydantic Validation: LegalResearchAnswer]
-    Pydantic --> Session[Streamlit Session History]
-    Session --> Card[Interactive Result UI Card]
+    Pydantic --> State[WorkflowState Object]
+    State --> Session[Streamlit Session State History]
+    Session --> Card[Interactive Result UI Cards]
     Card --> UI
 ```
 
 ---
 
-## 3. Directory & File Structure
+## 10. Directory & File Structure
 
 ```text
 RAG Agentic Ai/
@@ -146,7 +340,7 @@ RAG Agentic Ai/
 
 ---
 
-## 4. Synthetic Case Dataset: *State of Maharashtra vs. Ramesh Kumar*
+## 11. Synthetic Case Dataset: *State of Maharashtra vs. Ramesh Kumar*
 
 The platform includes a complete, realistic multi-document criminal case file in `sample_data/` covering:
 1. **First Information Report (FIR No. 142/2024)**: Incident report from Apex Towers murder case under IPC 302/392/120B / BNSS.
@@ -160,7 +354,7 @@ The platform includes a complete, realistic multi-document criminal case file in
 
 ---
 
-## 5. Quick Start & Setup
+## 12. Quick Start & Setup
 
 ### Prerequisites
 - **Python 3.10+** installed
@@ -202,7 +396,7 @@ GEMINI_MODEL=gemini-1.5-flash
 
 ---
 
-## 6. Running the Application
+## 13. Running the Application
 
 Launch the Streamlit web application:
 ```bash
@@ -219,7 +413,7 @@ Access the dashboard at `http://localhost:8501`.
 
 ---
 
-## 7. Automated Testing & Verification
+## 14. Automated Testing & Verification
 
 Run the automated verification scripts:
 
@@ -236,7 +430,8 @@ python scratch/generate_synthetic_dataset.py
 
 ---
 
-## 8. License & Disclaimers
+## 15. License & Disclaimers
 
 This project is created for research and educational purposes under the AgenticAI framework. Please consult qualified legal professionals for official legal matters.
+
 
