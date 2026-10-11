@@ -1,3 +1,5 @@
+import html
+import re
 import os
 from pathlib import Path
 import streamlit as st
@@ -725,13 +727,14 @@ html, body, .stApp, [data-testid="stAppViewContainer"],
     border: 1px solid rgba(34,197,94,0.2);
     border-radius: 3px;
     padding: 3px 8px;
-    margin-bottom: 16px;
+    margin-bottom: 0;
 }
 .answer-text {
     font-family: var(--font-sans);
-    font-size: 0.92rem;
+    font-size: 0.95rem;
     color: var(--text-primary);
     line-height: 1.7;
+    margin-top: 14px;
 }
 
 /* ── META PILLS ───────────────────────────── */
@@ -1449,8 +1452,8 @@ with tab_research:
             st.warning(f"Structured output validation: {state.validation_error}")
 
         # Workflow Pipeline Visualization (Sequential Load Animation)
-        st.markdown('<div class="section-label-blue">Agent Workflow Pipeline</div>', unsafe_allow_html=True)
-        st.markdown(f"""
+        st.html('<div class="section-label-blue">Agent Workflow Pipeline</div>')
+        st.html(f"""
         <div class="pipeline-container">
             <div class="pipeline-node step-1">
                 <div class="pipeline-dot completed"></div>
@@ -1461,7 +1464,7 @@ with tab_research:
             <div class="pipeline-node step-2">
                 <div class="pipeline-dot completed"></div>
                 <div class="pipeline-label">Intent</div>
-                <div class="pipeline-value">{intent_val.replace('_', ' ').title()}</div>
+                <div class="pipeline-value">{html.escape(intent_val.replace('_', ' ').title())}</div>
             </div>
             <div class="pipeline-connector conn-2"></div>
             <div class="pipeline-node step-3">
@@ -1473,13 +1476,13 @@ with tab_research:
             <div class="pipeline-node step-4">
                 <div class="pipeline-dot completed"></div>
                 <div class="pipeline-label">Evidence</div>
-                <div class="pipeline-value">{strength}</div>
+                <div class="pipeline-value">{html.escape(strength)}</div>
             </div>
             <div class="pipeline-connector conn-4"></div>
             <div class="pipeline-node step-5">
                 <div class="pipeline-dot completed"></div>
                 <div class="pipeline-label">LLM</div>
-                <div class="pipeline-value">{provider_choice.title()}</div>
+                <div class="pipeline-value">{html.escape(provider_choice.title())}</div>
             </div>
             <div class="pipeline-connector conn-5"></div>
             <div class="pipeline-node step-6">
@@ -1488,29 +1491,33 @@ with tab_research:
                 <div class="pipeline-value">{"Validated" if ans else "Raw"}</div>
             </div>
         </div>
-        """, unsafe_allow_html=True)
+        """)
 
         # Meta pills
-        st.markdown(f"""
+        st.html(f"""
         <div class="meta-pills">
-            <span class="pill pill-intent">Intent: {intent_val.replace('_', ' ')}</span>
-            <span class="pill {strength_class}">Evidence: {strength}</span>
+            <span class="pill pill-intent">Intent: {html.escape(intent_val.replace('_', ' '))}</span>
+            <span class="pill {strength_class}">Evidence: {html.escape(strength)}</span>
             <span class="pill pill-sources">Sources: {len(state.sources)}</span>
         </div>
-        """, unsafe_allow_html=True)
+        """)
 
         # ─── ANSWER CARD ─────────────────────
         if ans:
             norm_disp_html = ""
             if getattr(state, 'normalized_query', None) and state.normalized_query.strip().lower() != state.query.strip().lower():
-                norm_disp_html = f'<div style="font-size:0.82rem;color:var(--blue-glow);margin-top:4px;font-family:var(--font-mono);"><span style="color:var(--text-muted);">Normalized:</span> {state.normalized_query}</div>'
+                norm_disp_html = f'<div style="font-size:0.82rem;color:var(--blue-glow);margin-top:4px;font-family:var(--font-mono);"><span style="color:var(--text-muted);">Normalized:</span> {html.escape(state.normalized_query)}</div>'
 
-            st.markdown(f"""
+            clean_query = html.escape(state.query)
+            clean_ans = html.escape(ans.answer).replace("\n\n", "<br><br>").replace("\n", "<br>")
+            clean_ans = re.sub(r'\*\*(.*?)\*\*', r'<strong>\1</strong>', clean_ans)
+
+            st.html(f"""
             <div class="answer-surface">
                 <div class="result-header">
                     <div>
                         <div class="answer-label">AI Research Response</div>
-                        <div style="font-size:1.05rem;font-weight:600;color:var(--text-primary);margin-top:4px;">{state.query}</div>
+                        <div style="font-size:1.05rem;font-weight:600;color:var(--text-primary);margin-top:4px;">{clean_query}</div>
                         {norm_disp_html}
                     </div>
                     <div class="answer-grounded">
@@ -1518,95 +1525,100 @@ with tab_research:
                         Source Grounded
                     </div>
                 </div>
-                <div class="answer-text">{ans.answer}</div>
+                <div class="answer-text">{clean_ans}</div>
             </div>
-            """, unsafe_allow_html=True)
+            """)
 
             # Key Findings + Evidence in columns
             col_findings, col_evidence = st.columns(2)
 
             with col_findings:
-                st.markdown('<div class="section-label-blue">Key Legal Findings</div>', unsafe_allow_html=True)
-                findings_html = ""
+                st.html('<div class="section-label-blue">Key Legal Findings</div>')
+                findings_html = '<div class="findings-container">'
                 for idx, f in enumerate(ans.key_findings, 1):
                     findings_html += f"""
                     <div class="finding-row">
                         <div class="finding-num">{idx:02d}</div>
-                        <div class="finding-text">{f}</div>
+                        <div class="finding-text">{html.escape(f)}</div>
                     </div>"""
-                st.markdown(findings_html, unsafe_allow_html=True)
+                findings_html += '</div>'
+                st.html(findings_html)
 
             with col_evidence:
-                st.markdown('<div class="section-label-blue">Evidence & Witness Summary</div>', unsafe_allow_html=True)
-                evidence_html = ""
+                st.html('<div class="section-label-blue">Evidence & Witness Summary</div>')
+                evidence_html = '<div class="findings-container">'
                 for idx, e in enumerate(ans.evidence_summary, 1):
                     evidence_html += f"""
                     <div class="finding-row">
                         <div class="finding-num">{idx:02d}</div>
-                        <div class="finding-text">{e}</div>
+                        <div class="finding-text">{html.escape(e)}</div>
                     </div>"""
-                st.markdown(evidence_html, unsafe_allow_html=True)
+                evidence_html += '</div>'
+                st.html(evidence_html)
 
             # Limitations
             if ans.limitations:
-                st.markdown('<div class="section-label">Limitations & Unknowns</div>', unsafe_allow_html=True)
-                lim_html = ""
+                st.html('<div class="section-label">Limitations & Unknowns</div>')
+                lim_html = '<div class="findings-container">'
                 for idx, lim in enumerate(ans.limitations, 1):
                     lim_html += f"""
                     <div class="finding-row">
                         <div class="finding-num" style="color:var(--text-muted);">{idx:02d}</div>
-                        <div class="finding-text" style="color:var(--text-secondary);">{lim}</div>
+                        <div class="finding-text" style="color:var(--text-secondary);">{html.escape(lim)}</div>
                     </div>"""
-                st.markdown(lim_html, unsafe_allow_html=True)
+                lim_html += '</div>'
+                st.html(lim_html)
 
         else:
             # Fallback for non-structured answer
-            st.markdown(f"""
+            clean_query = html.escape(state.query)
+            clean_fallback = html.escape(state.final_answer or state.response or "").replace("\n\n", "<br><br>").replace("\n", "<br>")
+            st.html(f"""
             <div class="answer-surface">
                 <div class="answer-label">Research Response</div>
-                <div style="margin-top:4px;font-size:1rem;font-weight:600;color:var(--text-primary);">{state.query}</div>
-                <div class="answer-text" style="margin-top:16px;">{state.final_answer}</div>
+                <div style="margin-top:4px;font-size:1rem;font-weight:600;color:var(--text-primary);">{clean_query}</div>
+                <div class="answer-text" style="margin-top:16px;">{clean_fallback}</div>
             </div>
-            """, unsafe_allow_html=True)
+            """)
 
         # ─── SOURCES ─────────────────────────
         with st.expander(f"EVIDENCE SOURCES  [{len(state.sources)} retrieved]"):
             if not state.sources:
-                st.markdown("""
+                st.html("""
                 <div class="empty-state">
                     <div class="empty-title">No Sources Retrieved</div>
                     <div class="empty-desc">The query did not match any documents in the knowledge base.</div>
                 </div>
-                """, unsafe_allow_html=True)
+                """)
             else:
                 for src in state.sources:
-                    st.markdown(f"""
+                    st.html(f"""
                     <div class="source-card">
                         <div class="source-top">
                             <span class="source-id">Source {src['citation_num']:02d}</span>
                             <span class="source-page">Page {src['page_number']}</span>
                         </div>
-                        <div class="source-name">{src['document_name']}</div>
-                        <div class="source-excerpt">"{src['excerpt']}"</div>
+                        <div class="source-name">{html.escape(src['document_name'])}</div>
+                        <div class="source-excerpt">"{html.escape(src['excerpt'])}"</div>
                         <div class="source-meta">
                             <span class="source-meta-item">Chunk #{src['chunk_id']}</span>
                         </div>
                     </div>
-                    """, unsafe_allow_html=True)
+                    """)
 
         # ─── EXECUTED TOOLS LOG ───────────────
         if getattr(state, "executed_tools", None):
             with st.expander(f"EXECUTED AGENT TOOLS  [{len(state.executed_tools)} tools invoked]"):
                 for tool_item in state.executed_tools:
-                    st.markdown(f"""
+                    st.html(f"""
                     <div class="source-card" style="border-left: 3px solid var(--blue-bright);">
                         <div class="source-top">
-                            <span class="source-id" style="color:var(--blue-glow); font-weight:700;">Tool: {tool_item.tool_name}</span>
-                            <span class="command-tag active">{tool_item.status.upper()}</span>
+                            <span class="source-id" style="color:var(--blue-glow); font-weight:700;">Tool: {html.escape(tool_item.tool_name)}</span>
+                            <span class="command-tag active">{html.escape(tool_item.status.upper())}</span>
                         </div>
-                        <div class="source-excerpt" style="margin-top:4px;">Result Preview: {tool_item.result_preview}</div>
+                        <div class="source-excerpt" style="margin-top:6px; font-family:var(--font-mono); font-size:0.75rem; white-space:pre-wrap;">{html.escape(tool_item.result_preview)}</div>
                     </div>
-                    """, unsafe_allow_html=True)
+                    """)
 
         # ─── QUERY & RETRIEVAL DIAGNOSTICS ────
         with st.expander("QUERY UNDERSTANDING & RETRIEVAL DIAGNOSTICS"):
@@ -1638,39 +1650,39 @@ with tab_research:
                     st.success("Pydantic LegalResearchAnswer Validation: PASSED")
 
             if state.retrieved_chunks:
-                st.markdown('<div class="section-label" style="margin-top:14px;">Retrieved Chunks & Relevance Scores</div>', unsafe_allow_html=True)
+                st.html('<div class="section-label" style="margin-top:14px;">Retrieved Chunks & Relevance Scores</div>')
                 for c_idx, c_item in enumerate(state.retrieved_chunks, 1):
-                    st.markdown(f"""
+                    st.html(f"""
                     <div class="source-card" style="margin-bottom:8px;">
                         <div class="source-top">
                             <span class="source-id">Chunk #{c_item.chunk_id}</span>
                             <span class="command-tag active">Hybrid Score: {c_item.score:.3f}</span>
-                            <span class="source-page">{c_item.document_name} (Page {c_item.page_number})</span>
+                            <span class="source-page">{html.escape(c_item.document_name)} (Page {c_item.page_number})</span>
                         </div>
-                        <div class="source-excerpt" style="margin-top:6px;">"{c_item.text[:220].strip()}..."</div>
+                        <div class="source-excerpt" style="margin-top:6px;">"{html.escape(c_item.text[:220].strip())}..."</div>
                     </div>
-                    """, unsafe_allow_html=True)
+                    """)
 
         # ─── WORKFLOW LOG ─────────────────────
         with st.expander("AGENT WORKFLOW LOG"):
-            st.markdown('<div class="section-label">Research Plan</div>', unsafe_allow_html=True)
+            st.html('<div class="section-label">Research Plan</div>')
             for p_idx, plan_item in enumerate(state.plan, 1):
-                st.markdown(f"""
+                st.html(f"""
                 <div class="wf-step">
                     <span class="wf-num">{p_idx:02d}</span>
-                    <span class="wf-detail">{plan_item}</span>
+                    <span class="wf-detail">{html.escape(plan_item)}</span>
                 </div>
-                """, unsafe_allow_html=True)
+                """)
 
-            st.markdown('<div class="section-label" style="margin-top:16px;">Execution Log</div>', unsafe_allow_html=True)
+            st.html('<div class="section-label" style="margin-top:16px;">Execution Log</div>')
             for step in state.steps:
-                st.markdown(f"""
+                st.html(f"""
                 <div class="wf-step">
                     <span class="wf-num">[+]</span>
-                    <span class="wf-name">{step.step_name}</span>
-                    <span class="wf-detail"> &mdash; {step.detail}</span>
+                    <span class="wf-name">{html.escape(step.step_name)}</span>
+                    <span class="wf-detail"> &mdash; {html.escape(step.detail or '')}</span>
                 </div>
-                """, unsafe_allow_html=True)
+                """)
 
             st.markdown('<div class="section-label" style="margin-top:16px;">State JSON</div>', unsafe_allow_html=True)
             st.json(state.to_dict())

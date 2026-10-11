@@ -246,8 +246,14 @@ class LegalResearchAgent:
             normalized_query=state.normalized_query
         )
 
-        if tool_loop_output and tool_loop_output not in answer_obj.answer and "FIFA" not in tool_loop_output:
-            answer_obj.answer += f"\n\n### Agent Tool Observations:\n{tool_loop_output}"
+        # Only attach tool observations if tools were actually executed and returned meaningful insights
+        if (
+            getattr(state, "executed_tools", None)
+            and tool_loop_output
+            and tool_loop_output not in answer_obj.answer
+            and not any(phrase in tool_loop_output.lower() for phrase in ["more information", "specify which", "which legal case", "fifa", "could you please", "need more"])
+        ):
+            answer_obj.answer += f"\n\n### Agent Tool Observations:\n{tool_loop_output.strip()}"
 
         state.structured_answer = answer_obj
         state.raw_model_response = raw_resp
