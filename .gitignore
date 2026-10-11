@@ -18,3 +18,7 @@ data/documents/*
 # OS specific
 .DS_Store
 Thumbs.db
+
+# Agent configurations
+.agents/
+
