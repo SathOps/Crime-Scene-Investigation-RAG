@@ -1501,12 +1501,17 @@ with tab_research:
 
         # ─── ANSWER CARD ─────────────────────
         if ans:
+            norm_disp_html = ""
+            if getattr(state, 'normalized_query', None) and state.normalized_query.strip().lower() != state.query.strip().lower():
+                norm_disp_html = f'<div style="font-size:0.82rem;color:var(--blue-glow);margin-top:4px;font-family:var(--font-mono);"><span style="color:var(--text-muted);">Normalized:</span> {state.normalized_query}</div>'
+
             st.markdown(f"""
             <div class="answer-surface">
                 <div class="result-header">
                     <div>
                         <div class="answer-label">AI Research Response</div>
                         <div style="font-size:1.05rem;font-weight:600;color:var(--text-primary);margin-top:4px;">{state.query}</div>
+                        {norm_disp_html}
                     </div>
                     <div class="answer-grounded">
                         <span style="width:5px;height:5px;border-radius:50%;background:var(--green);display:inline-block;"></span>
@@ -1599,8 +1604,50 @@ with tab_research:
                             <span class="source-id" style="color:var(--blue-glow); font-weight:700;">Tool: {tool_item.tool_name}</span>
                             <span class="command-tag active">{tool_item.status.upper()}</span>
                         </div>
-                        <div class="source-name" style="margin-top:6px; font-family:var(--font-mono); font-size:0.75rem;">Arguments: {json.dumps(tool_item.tool_args)}</div>
                         <div class="source-excerpt" style="margin-top:4px;">Result Preview: {tool_item.result_preview}</div>
+                    </div>
+                    """, unsafe_allow_html=True)
+
+        # ─── QUERY & RETRIEVAL DIAGNOSTICS ────
+        with st.expander("QUERY UNDERSTANDING & RETRIEVAL DIAGNOSTICS"):
+            col_diag1, col_diag2 = st.columns(2)
+            with col_diag1:
+                st.markdown('<div class="section-label-blue">Query Preprocessing & Intent</div>', unsafe_allow_html=True)
+                st.markdown(f"**Original Query:** `{state.query}`")
+                st.markdown(f"**Normalized Query:** `{state.normalized_query or state.query}`")
+                conf_val = getattr(state, 'intent_confidence', 1.0)
+                st.markdown(f"**Classified Intent:** `{intent_val}` ({conf_val:.0%} confidence)")
+                
+                if getattr(state, 'normalization_notes', None):
+                    st.markdown("**Transformations Applied:**")
+                    for note in state.normalization_notes:
+                        st.markdown(f"• <span style='color:var(--text-secondary);font-size:0.85rem;'>{note}</span>", unsafe_allow_html=True)
+
+                if getattr(state, 'is_ambiguous', False):
+                    st.warning(f"Ambiguity Flagged: {state.clarification_prompt}")
+
+            with col_diag2:
+                st.markdown('<div class="section-label-blue">Pipeline Execution Status</div>', unsafe_allow_html=True)
+                st.markdown(f"**Evidence Strength:** `{strength}`")
+                st.markdown(f"**Chunks Retrieved:** `{len(state.retrieved_chunks)} passages`")
+                st.markdown(f"**Tools Invoked:** `{len(state.executed_tools)} tools`")
+                
+                if getattr(state, 'validation_error', None):
+                    st.error(f"Validation Failure: {state.validation_error}")
+                else:
+                    st.success("Pydantic LegalResearchAnswer Validation: PASSED")
+
+            if state.retrieved_chunks:
+                st.markdown('<div class="section-label" style="margin-top:14px;">Retrieved Chunks & Relevance Scores</div>', unsafe_allow_html=True)
+                for c_idx, c_item in enumerate(state.retrieved_chunks, 1):
+                    st.markdown(f"""
+                    <div class="source-card" style="margin-bottom:8px;">
+                        <div class="source-top">
+                            <span class="source-id">Chunk #{c_item.chunk_id}</span>
+                            <span class="command-tag active">Hybrid Score: {c_item.score:.3f}</span>
+                            <span class="source-page">{c_item.document_name} (Page {c_item.page_number})</span>
+                        </div>
+                        <div class="source-excerpt" style="margin-top:6px;">"{c_item.text[:220].strip()}..."</div>
                     </div>
                     """, unsafe_allow_html=True)
 
