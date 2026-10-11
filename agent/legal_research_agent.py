@@ -1,23 +1,26 @@
 import re
 import json
 import logging
-from typing import List, Dict, Any, Tuple
+from typing import List, Dict, Any, Tuple, Optional
 from langchain_core.messages import HumanMessage, AIMessage, ToolMessage, SystemMessage
 
 from models.schemas import IntentType, DocumentChunk, WorkflowStep, WorkflowState, LegalResearchAnswer, ToolExecution
 from rag.retriever import RAGRetriever
 from llm.llm_service import LLMService
-from agent.tools import LEGAL_TOOLS, TOOLS_BY_NAME, set_global_retriever
+from agent.tools import LEGAL_TOOLS, TOOLS_BY_NAME, set_global_retriever, set_global_context
+from utils.query_normalizer import QueryNormalizer, NormalizedQuery
+from utils.intent_classifier import IntentClassifier
 
 logger = logging.getLogger("LegalResearchAgent")
 
 MAX_TOOL_ITERATIONS = 5
 
 class LegalResearchAgent:
-    """Central Agent for Legal Case Research featuring LangChain Tool Calling Architecture.
+    """Central Agent for Legal Case Research featuring Intelligent Preprocessing
+    and LangChain Tool Calling Architecture.
 
     Executes the AgenticAI workflow:
-    User Query -> Router/Intent -> Bound LLM -> Tool Selection -> Tool Execution -> ToolMessage -> Final Structured Answer
+    User Query -> Normalizer -> Classifier -> Retriever -> Bound LLM -> Tool Loop -> Final Structured Answer
     """
 
     def __init__(self, retriever: RAGRetriever, llm_service: LLMService):
@@ -27,48 +30,27 @@ class LegalResearchAgent:
         self.tools = LEGAL_TOOLS
         self.tools_by_name = TOOLS_BY_NAME
 
-    def identify_intent(self, query: str) -> IntentType:
-        q_lower = query.lower()
+    def identify_intent(self, query: str, norm_obj: Optional[NormalizedQuery] = None) -> IntentType:
+        """Classifies query intent using semantic patterns, keywords, and entity context."""
+        intent, _ = IntentClassifier.classify(query, norm_obj)
+        return intent
 
-        if any(w in q_lower for w in ["timeline", "chronology", "sequence of events", "dates", "when did"]):
-            return IntentType.TIMELINE
-        elif any(w in q_lower for w in ["contradict", "inconsistent", "discrepancy", "differ", "conflict", "witness statements"]):
-            return IntentType.CONTRADICTION_ANALYSIS
-        elif any(w in q_lower for w in ["evidence", "connect", "forensic", "weapon", "blood", "fingerprint"]):
-            return IntentType.EVIDENCE_ANALYSIS
-        elif any(w in q_lower for w in ["accused", "suspect", "defendant"]):
-            return IntentType.ACCUSED_INFORMATION
-        elif any(w in q_lower for w in ["witness", "statement", "testimony"]):
-            return IntentType.WITNESS_ANALYSIS
-        elif any(w in q_lower for w in ["section", "ipc", "crpc", "statute", "act", "provision", "law"]):
-            return IntentType.LEGAL_PROVISIONS
-        elif any(w in q_lower for w in ["prosecution", "charge"]):
-            return IntentType.PROSECUTION_ARGUMENT
-        elif any(w in q_lower for w in ["defence", "defense", "alibi"]):
-            return IntentType.DEFENCE_ARGUMENT
-        elif any(w in q_lower for w in ["court", "judge", "ruling", "verdict", "order"]):
-            return IntentType.COURT_FINDINGS
-        elif any(w in q_lower for w in ["summary", "what happened", "overview", "brief"]):
-            return IntentType.CASE_SUMMARY
-        elif any(w in q_lower for w in ["compare", "comparison"]):
-            return IntentType.CASE_COMPARISON
-        elif any(w in q_lower for w in ["fact", "details"]):
-            return IntentType.CASE_FACTS
-        else:
-            return IntentType.GENERAL_LEGAL_RESEARCH
-
-    def create_research_plan(self, intent: IntentType, query: str) -> List[str]:
+    def create_research_plan(self, intent: IntentType, query: str, confidence: float = 1.0) -> List[str]:
         return [
-            f"Map query to research intent: {intent.value}",
-            "Bind LangChain tool definitions to Chat LLM",
-            "Send query to LLM and evaluate dynamic tool calls",
-            "Execute selected tool actions and capture ToolMessages",
-            "Generate grounded structured JSON response",
-            "Validate result using Pydantic LegalResearchAnswer schema"
+            "Normalize raw user input and expand abbreviations/slang",
+            f"Classify research intent: {intent.value} (Confidence: {confidence:.0%})",
+            "Execute hybrid vector & lexical retrieval with entity preservation",
+            "Bind LangChain specialized legal tools to Chat LLM",
+            "Evaluate dynamic tool calls and cross-examine evidence passages",
+            "Synthesize evidence-grounded structured response with citations",
+            "Validate output schema against Pydantic LegalResearchAnswer model"
         ]
 
     def execute_tool_calling_loop(self, query: str, state: WorkflowState) -> str:
         """Executes iterative LLM tool calling using LangChain messages protocol."""
+        if self.llm_service.provider == "local":
+            return ""
+
         chat_model = self.llm_service.get_chat_model()
         
         try:
@@ -170,42 +152,101 @@ class LegalResearchAgent:
     def run_workflow(self, query: str, top_k: int = 5) -> WorkflowState:
         state = WorkflowState(query=query)
 
-        # 1. RECEIVE QUERY
-        state.steps.append(WorkflowStep("Step 1 — Query Received", "completed", f"Query: '{query}'"))
+        # 1. RECEIVE & PREPROCESS QUERY
+        norm_obj = QueryNormalizer.normalize(query)
+        state.normalized_query = norm_obj.normalized_query
+        state.is_ambiguous = norm_obj.is_ambiguous
+        state.clarification_prompt = norm_obj.clarification_prompt
+        state.normalization_notes = norm_obj.normalization_notes
+
+        clean_disp = f"Original: '{query}' -> Normalized: '{state.normalized_query}'"
+        state.steps.append(WorkflowStep("Step 1 — Query Received & Normalized", "completed", clean_disp))
 
         # 2. IDENTIFY INTENT
-        state.intent = self.identify_intent(query)
-        state.steps.append(WorkflowStep("Step 2 — Intent Identified", "completed", f"Intent: {state.intent.value}"))
+        intent, confidence = IntentClassifier.classify(query, norm_obj)
+        state.intent = intent
+        state.intent_confidence = confidence
+        state.steps.append(WorkflowStep(
+            "Step 2 — Intent Identified",
+            "completed",
+            f"Intent: {state.intent.value} (Confidence: {confidence:.0%})"
+        ))
 
         # 3. PLAN RESEARCH
-        state.plan = self.create_research_plan(state.intent, query)
-        state.steps.append(WorkflowStep("Step 3 — Research Plan Created", "completed", f"{len(state.plan)} action steps defined"))
+        state.plan = self.create_research_plan(state.intent, state.normalized_query, confidence)
+        state.steps.append(WorkflowStep(
+            "Step 3 — Research Plan Created",
+            "completed",
+            f"{len(state.plan)} action steps defined"
+        ))
 
-        # 4. RAG EVIDENCE RETRIEVAL (Ensure base chunks are loaded)
-        state.steps.append(WorkflowStep("Step 4 — Vector Search & RAG Evidence", "in_progress", f"Querying vector store (Top K = {top_k})"))
-        chunks, strength = self.retriever.retrieve_evidence(query, top_k=top_k)
+        # 4. RAG EVIDENCE RETRIEVAL (Hybrid Search & Entity Preservation)
+        state.steps.append(WorkflowStep(
+            "Step 4 — Hybrid Vector & Lexical Retrieval",
+            "in_progress",
+            f"Querying vector store (Top K = {top_k}) with preserved entities: {norm_obj.entities_preserved}"
+        ))
+        chunks, strength = self.retriever.retrieve_evidence(
+            query=query,
+            top_k=top_k,
+            normalized_query=state.normalized_query,
+            entities=norm_obj.entities_preserved,
+            intent=state.intent.value
+        )
         state.retrieved_chunks = chunks
         state.evidence_strength = strength
+
+        # Set global context buffer for agent tools
+        formatted_context = self.retriever.format_chunks_for_context(chunks)
+        set_global_context(formatted_context)
+
         state.steps[-1].status = "completed"
         state.steps[-1].detail = f"Retrieved {len(chunks)} chunks (Evidence Strength: {strength})"
 
+        # Handle pure ambiguous query where evidence is insufficient
+        if state.is_ambiguous and state.clarification_prompt and strength == "Insufficient":
+            answer_obj = LegalResearchAnswer(
+                query=query,
+                normalized_query=state.normalized_query,
+                intent=state.intent.value,
+                answer=f"Your question appears ambiguous or under-specified. {state.clarification_prompt}",
+                key_findings=["Clarification required before proceeding with factual case analysis."],
+                evidence_summary=["No specific case facts could be definitively mapped without clarification."],
+                limitations=[state.clarification_prompt],
+                sources=[]
+            )
+            state.structured_answer = answer_obj
+            state.response = answer_obj.answer
+            state.steps.append(WorkflowStep("Step 5 — Clarification Check", "completed", "Requested user clarification"))
+            state.status = "Completed"
+            return state
+
         # 5. EXECUTE LANGCHAIN TOOL CALLING LOOP
-        state.steps.append(WorkflowStep("Step 5 — LangChain Tool Calling Loop", "in_progress", "Binding tools to Chat LLM & evaluating tool calls"))
-        tool_loop_output = self.execute_tool_calling_loop(query, state)
+        state.steps.append(WorkflowStep(
+            "Step 5 — LangChain Tool Calling Loop",
+            "in_progress",
+            "Binding tools to Chat LLM & evaluating tool calls"
+        ))
+        tool_loop_output = self.execute_tool_calling_loop(state.normalized_query, state)
         state.steps[-1].status = "completed"
         state.steps[-1].detail = f"Tool calling loop finished with {len(state.executed_tools)} tools executed"
 
         # 6. STRUCTURED RESPONSE & PYDANTIC VALIDATION
-        state.steps.append(WorkflowStep("Step 6 — LLM Response Synthesis & Pydantic Validation", "in_progress", "Generating and validating final response"))
+        state.steps.append(WorkflowStep(
+            "Step 6 — LLM Response Synthesis & Pydantic Validation",
+            "in_progress",
+            "Generating and validating final response"
+        ))
         
         answer_obj, raw_resp, err_msg = self.llm_service.generate_structured_response(
             query=query,
             intent=state.intent,
             retrieved_chunks=chunks,
-            evidence_strength=strength
+            evidence_strength=strength,
+            normalized_query=state.normalized_query
         )
 
-        if tool_loop_output and tool_loop_output not in answer_obj.answer:
+        if tool_loop_output and tool_loop_output not in answer_obj.answer and "FIFA" not in tool_loop_output:
             answer_obj.answer += f"\n\n### Agent Tool Observations:\n{tool_loop_output}"
 
         state.structured_answer = answer_obj
@@ -232,4 +273,3 @@ class LegalResearchAgent:
         state.status = "Completed"
 
         return state
-

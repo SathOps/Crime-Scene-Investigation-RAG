@@ -68,12 +68,14 @@ class LLMService:
         query: str,
         intent: IntentType,
         retrieved_chunks: List[DocumentChunk],
-        evidence_strength: str
+        evidence_strength: str,
+        normalized_query: Optional[str] = None
     ) -> Tuple[LegalResearchAnswer, str, str]:
         """Generates a structured legal research response.
 
         Returns: (LegalResearchAnswer, raw_response_str, error_message)
         """
+        norm_query_str = normalized_query or query
 
         sources_list = [
             SourceModel(
@@ -90,11 +92,12 @@ class LLMService:
         if not retrieved_chunks or evidence_strength == "Insufficient":
             answer_obj = LegalResearchAnswer(
                 query=query,
+                normalized_query=norm_query_str,
                 intent=intent_str,
                 answer="I could not find sufficient supporting information in the provided case documents.",
                 key_findings=["No supporting facts found in the current knowledge base."],
                 evidence_summary=["No relevant document passages matched the query parameters."],
-                limitations=[f"Query '{query}' cannot be resolved with available case records."],
+                limitations=[f"Query '{norm_query_str}' cannot be resolved with available case records."],
                 sources=[]
             )
             return answer_obj, json.dumps(answer_obj.model_dump(), indent=2), ""
@@ -108,7 +111,7 @@ class LLMService:
             is_alive, msg = LLMService.check_ollama_status(self.model_name)
             if not is_alive and "not found" not in msg:
                 error_msg = f"Ollama Error: {msg}"
-                return self._build_fallback_answer(query, intent_str, retrieved_chunks, error_msg), "", error_msg
+                return self._build_fallback_answer(query, intent_str, retrieved_chunks, error_msg, norm_query_str), "", error_msg
 
             try:
                 from langchain_ollama import ChatOllama
@@ -122,17 +125,18 @@ class LLMService:
                 chain = LEGAL_RESEARCH_PROMPT_TEMPLATE | llm
                 response = chain.invoke({
                     "question": query,
+                    "normalized_query": norm_query_str,
                     "intent": intent_str,
                     "evidence_strength": evidence_strength,
                     "context": formatted_context
                 })
                 
                 raw_content = response.content if hasattr(response, 'content') else str(response)
-                return self._parse_and_validate_json(raw_content, query, intent_str, sources_list, retrieved_chunks)
+                return self._parse_and_validate_json(raw_content, query, intent_str, sources_list, retrieved_chunks, norm_query_str)
 
             except Exception as e:
                 error_msg = f"LangChain Ollama invocation failed: {str(e)}"
-                return self._build_fallback_answer(query, intent_str, retrieved_chunks, error_msg), "", error_msg
+                return self._build_fallback_answer(query, intent_str, retrieved_chunks, error_msg, norm_query_str), "", error_msg
 
         # ─────────────────────────────────────────────
         # PROVIDER 2: GEMINI
@@ -143,6 +147,7 @@ class LLMService:
                 client = genai.Client(api_key=self.api_key)
                 prompt_messages = LEGAL_RESEARCH_PROMPT_TEMPLATE.format_messages(
                     question=query,
+                    normalized_query=norm_query_str,
                     intent=intent_str,
                     evidence_strength=evidence_strength,
                     context=formatted_context
@@ -154,10 +159,10 @@ class LLMService:
                     contents=prompt_text
                 )
                 raw_content = res.text.strip() if res and res.text else ""
-                return self._parse_and_validate_json(raw_content, query, intent_str, sources_list, retrieved_chunks)
+                return self._parse_and_validate_json(raw_content, query, intent_str, sources_list, retrieved_chunks, norm_query_str)
             except Exception as e:
                 error_msg = f"Gemini API invocation failed: {str(e)}"
-                return self._build_fallback_answer(query, intent_str, retrieved_chunks, error_msg), "", error_msg
+                return self._build_fallback_answer(query, intent_str, retrieved_chunks, error_msg, norm_query_str), "", error_msg
 
         # ─────────────────────────────────────────────
         # PROVIDER 3: OPENAI
@@ -168,6 +173,7 @@ class LLMService:
                 client = OpenAI(api_key=self.api_key)
                 prompt_messages = LEGAL_RESEARCH_PROMPT_TEMPLATE.format_messages(
                     question=query,
+                    normalized_query=norm_query_str,
                     intent=intent_str,
                     evidence_strength=evidence_strength,
                     context=formatted_context
@@ -180,15 +186,15 @@ class LLMService:
                     temperature=0
                 )
                 raw_content = res.choices[0].message.content.strip()
-                return self._parse_and_validate_json(raw_content, query, intent_str, sources_list, retrieved_chunks)
+                return self._parse_and_validate_json(raw_content, query, intent_str, sources_list, retrieved_chunks, norm_query_str)
             except Exception as e:
                 error_msg = f"OpenAI API invocation failed: {str(e)}"
-                return self._build_fallback_answer(query, intent_str, retrieved_chunks, error_msg), "", error_msg
+                return self._build_fallback_answer(query, intent_str, retrieved_chunks, error_msg, norm_query_str), "", error_msg
 
         # ─────────────────────────────────────────────
         # FALLBACK: LOCAL DETERMINISTIC GENERATOR
         # ─────────────────────────────────────────────
-        fallback_obj = self._build_fallback_answer(query, intent_str, retrieved_chunks, "Using zero-config local fallback")
+        fallback_obj = self._build_fallback_answer(query, intent_str, retrieved_chunks, "Using zero-config local fallback", norm_query_str)
         return fallback_obj, json.dumps(fallback_obj.model_dump(), indent=2), ""
 
     def _format_chunks(self, chunks: List[DocumentChunk]) -> str:
@@ -238,7 +244,8 @@ class LLMService:
         query: str,
         intent: str,
         sources_list: List[SourceModel],
-        chunks: List[DocumentChunk]
+        chunks: List[DocumentChunk],
+        normalized_query: Optional[str] = None
     ) -> Tuple[LegalResearchAnswer, str, str]:
         """Extracts, repairs, and validates JSON against LegalResearchAnswer Pydantic model (Experiment 4)."""
         json_str = self._clean_and_extract_json(raw_content)
@@ -252,6 +259,7 @@ class LLMService:
         if isinstance(data, dict):
             # Ensure required schema keys exist
             data["query"] = data.get("query") or query
+            data["normalized_query"] = data.get("normalized_query") or (normalized_query or query)
             data["intent"] = data.get("intent") or intent
             data["answer"] = data.get("answer") or self._synthesize_answer_from_chunks(chunks)
             
@@ -282,7 +290,7 @@ class LLMService:
                 pass
 
         # If all JSON parsing failed, construct rich fallback answer
-        fallback_obj = self._build_fallback_answer(query, intent, chunks)
+        fallback_obj = self._build_fallback_answer(query, intent, chunks, "", normalized_query)
         return fallback_obj, raw_content, ""
 
     def _regex_extract_fields(self, raw_text: str, query: str, intent: str) -> Dict[str, Any]:
@@ -319,7 +327,14 @@ class LLMService:
                 findings.append(f"[{c.document_name}]: {sentences[0]}.")
         return findings if findings else ["Case facts extracted from indexed documents."]
 
-    def _build_fallback_answer(self, query: str, intent: str, chunks: List[DocumentChunk], note: str = "") -> LegalResearchAnswer:
+    def _build_fallback_answer(
+        self,
+        query: str,
+        intent: str,
+        chunks: List[DocumentChunk],
+        note: str = "",
+        normalized_query: Optional[str] = None
+    ) -> LegalResearchAnswer:
         """Constructs a rich, grounded LegalResearchAnswer object directly from retrieved document evidence."""
         findings = self._extract_key_findings_from_chunks(chunks)
         evidence_summaries = [f"Evidence Passage {i:02d} ({c.document_name}, Page {c.page_number}): {c.text[:180]}..." for i, c in enumerate(chunks, 1)]
@@ -336,6 +351,7 @@ class LLMService:
 
         return LegalResearchAnswer(
             query=query,
+            normalized_query=normalized_query or query,
             intent=intent,
             answer=full_answer,
             key_findings=findings,
