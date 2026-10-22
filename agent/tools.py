@@ -126,21 +126,27 @@ def analyze_witness_contradictions(evidence_text: str = "") -> str:
     return "\n".join(analysis)
 
 @tool
-def summarize_case_facts(case_title: str = "State vs Ramesh") -> str:
-    """Retrieve high-level overview of the case facts, accused details, victim info, and criminal charges.
-    Use this tool for broad case summaries, FIR summaries, or overview queries.
+def summarize_case_facts(case_title: str = "") -> str:
+    """Summarize case facts from the active retrieved evidence context only.
 
     Args:
-        case_title: Title or case reference string.
+        case_title: Optional case title or reference. Do not use placeholders.
     """
+    global _GLOBAL_CONTEXT_BUFFER
+    context = (_GLOBAL_CONTEXT_BUFFER or "").strip()
+    if not context:
+        return "No retrieved case evidence is available to summarize."
+
+    title = (case_title or "").strip()
+    if title.lower() in {"your case title here", "case title", "unknown", "n/a", "none"}:
+        title = ""
+    heading = f"Case Overview [{title}]" if title else "Case Overview (based on retrieved excerpts)"
     return (
-        f"Case Overview [{case_title}]:\n"
-        "• FIR No.: 142/2024 (Shivajinagar Police Station, Pune)\n"
-        "• Incident Date: 13th November 2024, between 21:15 HRS and 22:00 HRS\n"
-        "• Victim: Vikram Malhotra (Managing Director, Apex Logistics Pvt. Ltd.) — Deceased (Gunshot wound)\n"
-        "• Accused: Ramesh Kumar (Former Financial Manager)\n"
-        "• Invoked Provisions: IPC Sections 302 (Murder), 392 (Robbery), 120B (Criminal Conspiracy)\n"
-        "• Key Physical Evidence: 9mm spent shell casing (Item-A), Bloodstained wristwatch (Item-C), Stolen financial audit briefcase (Item-E)\n"
+        f"{heading}:\n"
+        "The following are retrieved source excerpts. Treat each claim according to its "
+        "source type and preserve disagreements between documents; this tool does not "
+        "independently establish guilt or resolve conflicting timelines.\n\n"
+        + context[:12000]
     )
 
 # Central Tool Registry
