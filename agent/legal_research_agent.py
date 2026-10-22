@@ -1,7 +1,7 @@
 import re
 import json
 import logging
-from typing import List, Dict, Any, Tuple, Optional
+from typing import List, Dict, Any, Tuple, Optional, Callable
 from langchain_core.messages import HumanMessage, AIMessage, ToolMessage, SystemMessage
 
 from models.schemas import IntentType, DocumentChunk, WorkflowStep, WorkflowState, LegalResearchAnswer, ToolExecution
@@ -203,8 +203,22 @@ class LegalResearchAgent:
 
         return final_response_str
 
-    def run_workflow(self, query: str, top_k: int = 5) -> WorkflowState:
+    def run_workflow(
+        self,
+        query: str,
+        top_k: int = 5,
+        progress_callback: Optional[Callable[[str], None]] = None,
+    ) -> WorkflowState:
+        """Run the workflow and optionally report progress as stages complete."""
+        def report(message: str) -> None:
+            if progress_callback is not None:
+                try:
+                    progress_callback(message)
+                except Exception:
+                    logger.debug("Progress callback failed", exc_info=True)
+
         state = WorkflowState(query=query)
+        report("Query received; normalizing and classifying intent.")
 
         # 1. RECEIVE & PREPROCESS QUERY
         norm_obj = QueryNormalizer.normalize(query)
@@ -236,6 +250,7 @@ class LegalResearchAgent:
 
         # Keep a self-contained hypothetical separate from unrelated uploaded case files.
         if is_standalone_hypothetical_query(query):
+            report("Self-contained hypothetical detected; skipping retrieval and case tools.")
             answer_obj = build_hypothetical_answer(
                 query, state.normalized_query, state.intent.value
             )
@@ -256,6 +271,7 @@ class LegalResearchAgent:
             return state
 
         # 4. RAG EVIDENCE RETRIEVAL (Hybrid Search & Entity Preservation)
+        report("Retrieving evidence from the local vector store; first retrieval may take several seconds.")
         state.steps.append(WorkflowStep(
             "Step 4 — Hybrid Vector & Lexical Retrieval",
             "in_progress",
@@ -277,6 +293,7 @@ class LegalResearchAgent:
 
         state.steps[-1].status = "completed"
         state.steps[-1].detail = f"Retrieved {len(chunks)} chunks (Evidence Strength: {strength})"
+        report(f"Retrieval complete: {len(chunks)} chunks; evidence strength {strength}. Running specialist analysis.")
 
         # Handle pure ambiguous query where evidence is insufficient
         if state.is_ambiguous and state.clarification_prompt and strength == "Insufficient":
@@ -337,6 +354,7 @@ class LegalResearchAgent:
             f"Completed {successful_specialists} of {len(specialist_results)} specialist analyses. "
             "Specialist notes are secondary analysis; final synthesis still uses retrieved source passages."
         )
+        report(f"Specialist analysis complete: {successful_specialists}/{len(specialist_results)} completed. Preparing final synthesis.")
         specialist_analysis_notes = self.multi_agent_coordinator.format_successful_analyses(
             specialist_results
         )
@@ -352,6 +370,7 @@ class LegalResearchAgent:
             state.normalized_query, state
         )
         tool_loop_step.status = "completed"
+        report("Tool-calling stage complete. Generating the final structured answer.")
         tool_loop_step.detail = (
             f"Tool calling loop finished with "
             f"{len(state.executed_tools)} tools executed"
@@ -396,5 +415,6 @@ class LegalResearchAgent:
 
         state.steps.append(WorkflowStep("Step 8 — Sources & Citations", "completed", f"{len(state.sources)} verifiable source references attached"))
         state.status = "Completed"
+        report("Research workflow completed; sources and validation results are ready.")
 
         return state
