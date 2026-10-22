@@ -8,6 +8,7 @@ from models.schemas import IntentType, DocumentChunk, WorkflowStep, WorkflowStat
 from rag.retriever import RAGRetriever
 from llm.llm_service import LLMService
 from agent.tools import LEGAL_TOOLS, TOOLS_BY_NAME, set_global_retriever, set_global_context
+from agent.specialist_agents import MultiAgentCoordinator
 from utils.query_normalizer import QueryNormalizer, NormalizedQuery
 from utils.intent_classifier import IntentClassifier
 
@@ -29,6 +30,7 @@ class LegalResearchAgent:
         set_global_retriever(self.retriever)
         self.tools = LEGAL_TOOLS
         self.tools_by_name = TOOLS_BY_NAME
+        self.multi_agent_coordinator = MultiAgentCoordinator(llm_service)
 
     def identify_intent(self, query: str, norm_obj: Optional[NormalizedQuery] = None) -> IntentType:
         """Classifies query intent using semantic patterns, keywords, and entity context."""
@@ -41,6 +43,7 @@ class LegalResearchAgent:
             f"Classify research intent: {intent.value} (Confidence: {confidence:.0%})",
             "Execute hybrid vector & lexical retrieval with entity preservation",
             "Bind LangChain specialized legal tools to Chat LLM",
+            "Delegate retrieved evidence to intent-relevant specialist agents",
             "Evaluate dynamic tool calls and cross-examine evidence passages",
             "Synthesize evidence-grounded structured response with citations",
             "Validate output schema against Pydantic LegalResearchAnswer model"
@@ -221,9 +224,50 @@ class LegalResearchAgent:
             state.status = "Completed"
             return state
 
-        # 5. EXECUTE LANGCHAIN TOOL CALLING LOOP
+        # 5. MULTI-AGENT SPECIALIST ANALYSIS
+        specialist_step = WorkflowStep(
+            "Step 5 — Multi-Agent Specialist Analysis",
+            "in_progress",
+            f"Routing evidence to specialists for intent: {state.intent.value}"
+        )
+        state.steps.append(specialist_step)
+
+        specialist_context = self.retriever.format_chunks_for_context(chunks)
+        specialist_results = self.multi_agent_coordinator.analyze(
+            query=state.normalized_query,
+            intent=state.intent,
+            evidence_context=specialist_context,
+        )
+        successful_specialists = sum(
+            1 for result in specialist_results if result.status == "completed"
+        )
+        for result in specialist_results:
+            if result.status == "completed":
+                step_status = "completed"
+                detail = result.analysis[:700]
+            elif result.status == "failed":
+                step_status = "failed"
+                detail = result.error[:500]
+            else:
+                step_status = "completed"
+                detail = f"Skipped: {result.error or 'No specialist analysis performed.'}"
+            state.steps.append(WorkflowStep(
+                f"Agent — {result.agent_name}",
+                step_status,
+                detail,
+            ))
+        specialist_step.status = "completed" if successful_specialists else "failed"
+        specialist_step.detail = (
+            f"Completed {successful_specialists} of {len(specialist_results)} specialist analyses. "
+            "Specialist notes are secondary analysis; final synthesis still uses retrieved source passages."
+        )
+        specialist_analysis_notes = self.multi_agent_coordinator.format_successful_analyses(
+            specialist_results
+        )
+
+        # 6. EXECUTE LANGCHAIN TOOL CALLING LOOP
         state.steps.append(WorkflowStep(
-            "Step 5 — LangChain Tool Calling Loop",
+            "Step 6 — LangChain Tool Calling Loop",
             "in_progress",
             "Binding tools to Chat LLM & evaluating tool calls"
         ))
@@ -231,9 +275,9 @@ class LegalResearchAgent:
         state.steps[-1].status = "completed"
         state.steps[-1].detail = f"Tool calling loop finished with {len(state.executed_tools)} tools executed"
 
-        # 6. STRUCTURED RESPONSE & PYDANTIC VALIDATION
+        # 7. STRUCTURED RESPONSE & PYDANTIC VALIDATION
         state.steps.append(WorkflowStep(
-            "Step 6 — LLM Response Synthesis & Pydantic Validation",
+            "Step 7 — LLM Response Synthesis & Pydantic Validation",
             "in_progress",
             "Generating and validating final response"
         ))
@@ -243,7 +287,8 @@ class LegalResearchAgent:
             intent=state.intent,
             retrieved_chunks=chunks,
             evidence_strength=strength,
-            normalized_query=state.normalized_query
+            normalized_query=state.normalized_query,
+            analysis_notes=specialist_analysis_notes,
         )
 
         # Only attach tool observations if tools were actually executed and returned meaningful insights
@@ -262,7 +307,7 @@ class LegalResearchAgent:
         state.steps[-1].status = "completed"
         state.steps[-1].detail = "Response validated via Pydantic model" if not err_msg else f"Validated with fallback ({err_msg})"
 
-        # 7. SOURCES & CITATIONS
+        # 8. SOURCES & CITATIONS
         state.sources = []
         for idx, src in enumerate(answer_obj.sources, 1):
             state.sources.append({
@@ -275,7 +320,7 @@ class LegalResearchAgent:
                 "excerpt": src.excerpt
             })
 
-        state.steps.append(WorkflowStep("Step 7 — Sources & Citations", "completed", f"{len(state.sources)} verifiable source references attached"))
+        state.steps.append(WorkflowStep("Step 8 — Sources & Citations", "completed", f"{len(state.sources)} verifiable source references attached"))
         state.status = "Completed"
 
         return state
