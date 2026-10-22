@@ -309,7 +309,7 @@ class LLMService:
         # Try finding "answer": "..."
         ans_match = re.search(r'"answer"\s*:\s*"(.*?)"(?:\s*,\s*"|\s*\})', raw_text, re.DOTALL)
         if ans_match:
-            extracted["answer"] = ans_match.group(1).replace('\\"', '"').replace('\n', '\n')
+            extracted["answer"] = ans_match.group(1).replace('\\"', '"').replace('\\n', '\n')
 
         # Try finding key_findings
         kf_match = re.search(r'"key_findings"\s*:\s*\[(.*?)\]', raw_text, re.DOTALL)
