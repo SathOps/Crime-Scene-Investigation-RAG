@@ -8,6 +8,10 @@ from agent.specialist_agents import (
     EvidenceAssessmentAgent,
 )
 from models.schemas import IntentType
+from agent.legal_research_agent import (
+    is_standalone_hypothetical_query,
+    build_hypothetical_answer,
+)
 
 
 class FakeLLMService:
@@ -99,3 +103,47 @@ def test_deterministic_local_provider_skips_llm_specialists():
 
     assert len(results) == 2
     assert all(result.status == "skipped" for result in results)
+
+
+
+def test_generic_theft_timeline_is_detected_as_standalone_hypothetical():
+    query = (
+        "A person is accused of theft. One witness says the incident occurred at 8 PM, "
+        "while another says it occurred at 9 PM. CCTV footage shows the accused entering "
+        "the building at 8:30 PM. Analyze the timeline, identify the contradiction, "
+        "summarize the relevant facts, and assess the evidence."
+    )
+    assert is_standalone_hypothetical_query(query)
+
+
+def test_hypothetical_answer_uses_only_user_supplied_times():
+    query = (
+        "A person is accused of theft. One witness says the incident occurred at 8 PM, "
+        "while another says it occurred at 9 PM. CCTV footage shows the accused entering "
+        "the building at 8:30 PM."
+    )
+    answer = build_hypothetical_answer(query, query, "TIMELINE")
+    assert "8:00 PM" in answer.answer
+    assert "9:00 PM" in answer.answer
+    assert "8:30 PM" in answer.answer
+    assert "Ramesh Kumar" not in answer.answer
+    assert "murder" not in answer.answer.lower()
+    assert answer.sources == []
+    assert any("No case documents were used" in item for item in answer.limitations)
+
+
+def test_case_file_question_is_not_misclassified_as_generic_hypothetical():
+    query = "Analyze the timeline in the uploaded case file and compare the CCTV with witness statements."
+    assert not is_standalone_hypothetical_query(query)
+
+
+def test_hypothetical_timeline_preserves_clock_times_without_false_conversion():
+    answer = build_hypothetical_answer(
+        "One witness says 8 PM, another says 9 PM, and CCTV shows entry at 8:30 PM.",
+        "One witness says 8 PM, another says 9 PM, and CCTV shows entry at 8:30 PM.",
+        "TIMELINE",
+    )
+    assert "8:04 PM" not in answer.answer
+    assert "21:08" not in answer.answer
+    assert "8:00 PM" in answer.answer
+    assert "9:00 PM" in answer.answer
