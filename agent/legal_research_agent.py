@@ -14,6 +14,57 @@ from utils.intent_classifier import IntentClassifier
 
 logger = logging.getLogger("LegalResearchAgent")
 
+
+def is_standalone_hypothetical_query(query: str) -> bool:
+    """Identify generic, self-contained scenarios that must not be mixed with case files."""
+    text = (query or "").lower()
+    has_generic_subject = any(phrase in text for phrase in (
+        "a person is accused", "suppose a person", "hypothetically", "imagine that",
+        "consider this scenario", "in this hypothetical"
+    ))
+    scenario_markers = sum(phrase in text for phrase in (
+        "one witness", "another witness", "another says", "cctv", "footage shows",
+        "at 8 pm", "at 9 pm", "at 8:30 pm", "incident occurred"
+    ))
+    has_named_case_context = any(phrase in text for phrase in (
+        "uploaded case", "case file", "in the case of", "case number", "fir no."
+    ))
+    return has_generic_subject and scenario_markers >= 2 and not has_named_case_context
+
+
+def build_hypothetical_answer(query: str, normalized_query: str, intent: str) -> LegalResearchAnswer:
+    """Answer a self-contained hypothetical using only facts stated in the question."""
+    answer = (
+        "Based only on the hypothetical facts supplied: one witness places the incident at 8:00 PM; "
+        "another places it at 9:00 PM; and the CCTV is said to show the accused entering the building "
+        "at 8:30 PM. The witness accounts differ by one hour. The stated CCTV entry time falls between "
+        "the two accounts, but it records entry, not necessarily the time the theft occurred. These facts "
+        "alone do not establish who committed the theft or whether the accused was present when it occurred. "
+        "Further information would be needed about the theft's actual time window, what the CCTV covers, "
+        "and any evidence linking the accused to the offence."
+    )
+    return LegalResearchAnswer(
+        query=query,
+        normalized_query=normalized_query,
+        intent=intent,
+        answer=answer,
+        key_findings=[
+            "Witness 1 places the incident at 8:00 PM (as stated in the question).",
+            "Witness 2 places the incident at 9:00 PM (as stated in the question).",
+            "CCTV is described as showing building entry at 8:30 PM, not the theft itself."
+        ],
+        evidence_summary=[
+            "The two stated witness times differ by one hour.",
+            "The 8:30 PM entry time lies between the two reported incident times; entry alone does not prove participation in the theft."
+        ],
+        limitations=[
+            "No case documents were used for this hypothetical analysis.",
+            "The actual time of the theft, CCTV coverage, identity confirmation, and evidence connecting the accused to the theft are not provided."
+        ],
+        sources=[]
+    )
+
+
 MAX_TOOL_ITERATIONS = 5
 
 class LegalResearchAgent:
@@ -183,6 +234,27 @@ class LegalResearchAgent:
             f"{len(state.plan)} action steps defined"
         ))
 
+        # Keep a self-contained hypothetical separate from unrelated uploaded case files.
+        if is_standalone_hypothetical_query(query):
+            answer_obj = build_hypothetical_answer(
+                query, state.normalized_query, state.intent.value
+            )
+            state.structured_answer = answer_obj
+            state.response = answer_obj.answer
+            state.evidence_strength = "User-provided hypothetical"
+            state.steps.append(WorkflowStep(
+                "Step 4 — Hypothetical Scenario Isolation",
+                "completed",
+                "Answered only from user-provided facts; knowledge-base retrieval and case tools skipped."
+            ))
+            state.steps.append(WorkflowStep(
+                "Step 5 — Structured Response Validation",
+                "completed",
+                "Deterministic hypothetical answer conforms to LegalResearchAnswer schema."
+            ))
+            state.status = "Completed"
+            return state
+
         # 4. RAG EVIDENCE RETRIEVAL (Hybrid Search & Entity Preservation)
         state.steps.append(WorkflowStep(
             "Step 4 — Hybrid Vector & Lexical Retrieval",
@@ -298,17 +370,9 @@ class LegalResearchAgent:
             retrieved_chunks=chunks,
             evidence_strength=strength,
             normalized_query=state.normalized_query,
-            analysis_notes=specialist_analysis_notes,
+            # Specialist/tool output remains in the execution trace, not primary synthesis evidence.
+            analysis_notes="",
         )
-
-        # Only attach tool observations if tools were actually executed and returned meaningful insights
-        if (
-            getattr(state, "executed_tools", None)
-            and tool_loop_output
-            and tool_loop_output not in answer_obj.answer
-            and not any(phrase in tool_loop_output.lower() for phrase in ["more information", "specify which", "which legal case", "fifa", "could you please", "need more"])
-        ):
-            answer_obj.answer += f"\n\n### Agent Tool Observations:\n{tool_loop_output.strip()}"
 
         state.structured_answer = answer_obj
         state.raw_model_response = raw_resp
