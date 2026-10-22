@@ -294,6 +294,25 @@ class LLMService:
 
             try:
                 structured_obj = LegalResearchAnswer.model_validate(data)
+                # Valid JSON/schema does not guarantee that the user's full question was answered.
+                if len(structured_obj.answer.strip()) < 800:
+                    structured_obj.answer = self._expand_short_answer(
+                        structured_obj.answer, query, chunks
+                    )
+                if (
+                    not structured_obj.evidence_summary
+                    or (
+                        len(structured_obj.evidence_summary) == 1
+                        and structured_obj.evidence_summary[0].lower().startswith("synthesized evidence from")
+                    )
+                ):
+                    structured_obj.evidence_summary = [
+                        f"[{c.document_name}, p. {c.page_number}; chunk {c.chunk_id}] "
+                        + re.sub(r"\\s+", " ", c.text).strip()[:500]
+                        for c in chunks
+                    ]
+                if len(structured_obj.key_findings) < 3 or all(len(item) < 45 for item in structured_obj.key_findings):
+                    structured_obj.key_findings = self._extract_key_findings_from_chunks(chunks)
                 return structured_obj, raw_content, ""
             except ValidationError:
                 pass
@@ -320,6 +339,44 @@ class LLMService:
 
         return extracted
 
+    def _expand_short_answer(
+        self, initial_answer: str, query: str, chunks: List[DocumentChunk]
+    ) -> str:
+        """Expand a shallow model answer using only retrieved, attributed excerpts."""
+        sections = [
+            (initial_answer or "").strip(),
+            "",
+            "## Retrieved evidence and cross-source review",
+            "These points are limited to the passages retrieved for this query. Allegations, witness accounts, forensic observations, and judicial findings are not interchangeable.",
+        ]
+        for chunk in chunks:
+            excerpt = re.sub(r"\\s+", " ", chunk.text).strip()
+            if excerpt:
+                sections.extend([
+                    "",
+                    f"**Source: {chunk.document_name}, page {chunk.page_number} (chunk {chunk.chunk_id}; {chunk.document_type}).**",
+                    excerpt[:1100],
+                ])
+        judgment_text = " ".join(
+            chunk.text for chunk in chunks
+            if "judgment" in chunk.document_name.lower() or "court" in chunk.document_name.lower()
+        )
+        if judgment_text and not re.search(
+            r"\\b(convicted|acquitted|guilty|not guilty|final order|the accused is hereby|sentence[d]?)\\b",
+            judgment_text, flags=re.I
+        ):
+            sections.extend([
+                "",
+                "## Court findings — source limitation",
+                "A court-judgment passage was retrieved, but the available excerpt does not show a clear verdict, sentence, or final order. The court's actual findings cannot be reliably summarized from the excerpts available in this response.",
+            ])
+        sections.extend([
+            "",
+            "## Assessment limits",
+            "The retrieved passages support a source-by-source review but do not by themselves justify treating the prosecution's theory as proven. Any discrepancy must be assessed against the full witness statements, complete CCTV report, forensic report, and judgment reasoning. Where those passages were not retrieved, the point remains unresolved.",
+        ])
+        return "\\n".join(sections)
+
     def _synthesize_answer_from_chunks(self, chunks: List[DocumentChunk]) -> str:
         paragraphs = []
         for c in chunks[:3]:
@@ -330,11 +387,13 @@ class LLMService:
     def _extract_key_findings_from_chunks(self, chunks: List[DocumentChunk]) -> List[str]:
         findings = []
         for c in chunks:
-            clean = c.text.strip().replace("\n\n", " ")
-            sentences = [s.strip() for s in clean.split(".") if len(s.strip()) > 15]
-            if sentences:
-                findings.append(f"[{c.document_name}]: {sentences[0]}.")
-        return findings if findings else ["Case facts extracted from indexed documents."]
+            clean = re.sub(r"\\s+", " ", c.text).strip()
+            excerpt = clean[:320]
+            if len(clean) > 320:
+                excerpt = excerpt.rsplit(" ", 1)[0] + "…"
+            if excerpt:
+                findings.append(f"[{c.document_name}, p. {c.page_number}; chunk {c.chunk_id}] {excerpt}")
+        return findings if findings else ["No readable case facts were present in the retrieved passages."]
 
     def _build_fallback_answer(
         self,
