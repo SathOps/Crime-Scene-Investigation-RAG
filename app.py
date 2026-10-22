@@ -1412,21 +1412,34 @@ with tab_research:
         elif stats['total_chunks'] == 0:
             st.warning("Knowledge base is empty. Upload documents or load samples from the sidebar.")
         else:
-            # Live Animated Processing State
+            # Live workflow progress: update the status as real pipeline stages finish.
             with st.status("AGENT WORKFLOW IN PROGRESS...", expanded=True) as status_container:
-                st.write("● Step 1/5: Initializing query & validating input parameters...")
-                time.sleep(0.25)
-                st.write("● Step 2/5: Identifying research intent & constructing execution plan...")
-                time.sleep(0.25)
-                st.write("● Step 3/5: Querying vector store & retrieving top evidence chunks...")
-                
-                state: WorkflowState = agent.run_workflow(query=user_query, top_k=top_k_val)
-                
-                st.write("● Step 4/5: Executing LLM reasoning & Pydantic schema validation...")
-                time.sleep(0.25)
-                st.write("● Step 5/5: Synchronizing verifiable source citations & page numbers...")
-                time.sleep(0.25)
-                status_container.update(label="✓ Analysis Complete — Pipeline Synchronized", state="complete", expanded=False)
+                progress_line = st.empty()
+                progress_line.write("Starting research workflow...")
+
+                def show_workflow_progress(message: str) -> None:
+                    progress_line.write(f"● {message}")
+
+                try:
+                    state: WorkflowState = agent.run_workflow(
+                        query=user_query,
+                        top_k=top_k_val,
+                        progress_callback=show_workflow_progress,
+                    )
+                except Exception as exc:
+                    status_container.update(
+                        label="Research workflow failed",
+                        state="error",
+                        expanded=True,
+                    )
+                    st.error(f"Research failed: {exc}")
+                    raise
+
+                status_container.update(
+                    label="✓ Analysis Complete — Pipeline Synchronized",
+                    state="complete",
+                    expanded=False,
+                )
 
             # Store in history
             history_item = {
