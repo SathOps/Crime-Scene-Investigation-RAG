@@ -42,8 +42,8 @@ class LegalResearchAgent:
             "Normalize raw user input and expand abbreviations/slang",
             f"Classify research intent: {intent.value} (Confidence: {confidence:.0%})",
             "Execute hybrid vector & lexical retrieval with entity preservation",
-            "Bind LangChain specialized legal tools to Chat LLM",
             "Delegate retrieved evidence to intent-relevant specialist agents",
+            "Bind LangChain specialized legal tools to Chat LLM",
             "Evaluate dynamic tool calls and cross-examine evidence passages",
             "Synthesize evidence-grounded structured response with citations",
             "Validate output schema against Pydantic LegalResearchAnswer model"
