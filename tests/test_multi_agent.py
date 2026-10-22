@@ -147,3 +147,32 @@ def test_hypothetical_timeline_preserves_clock_times_without_false_conversion():
     assert "21:08" not in answer.answer
     assert "8:00 PM" in answer.answer
     assert "9:00 PM" in answer.answer
+
+
+
+def test_hypothetical_workflow_reports_progress_and_skips_retrieval():
+    from agent.legal_research_agent import LegalResearchAgent
+
+    class LocalLLM:
+        provider = "local"
+
+        def generate_text_response(self, **kwargs):
+            raise AssertionError("Hypothetical flow must not call the LLM.")
+
+    class NoRetrieval:
+        def retrieve_evidence(self, *args, **kwargs):
+            raise AssertionError("Hypothetical flow must skip retrieval.")
+
+    progress = []
+    agent = LegalResearchAgent(NoRetrieval(), LocalLLM())
+    state = agent.run_workflow(
+        "A person is accused of theft. One witness says the incident occurred at 8 PM, "
+        "while another says it occurred at 9 PM. CCTV footage shows the accused entering "
+        "the building at 8:30 PM.",
+        progress_callback=progress.append,
+    )
+
+    assert state.status == "Completed"
+    assert state.sources == []
+    assert any("skipping retrieval" in item.lower() for item in progress)
+    assert "Ramesh Kumar" not in state.response
