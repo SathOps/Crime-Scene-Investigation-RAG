@@ -176,3 +176,45 @@ def test_hypothetical_workflow_reports_progress_and_skips_retrieval():
     assert state.sources == []
     assert any("skipping retrieval" in item.lower() for item in progress)
     assert "Ramesh Kumar" not in state.response
+
+
+
+def test_query_normalizer_does_not_duplicate_names_or_cctv_footage():
+    from utils.query_normalizer import QueryNormalizer
+
+    query = (
+        "Analyze the case of State vs. Ramesh Kumar using the uploaded case documents. "
+        "Compare CCTV footage with witness statements and identify contradictions."
+    )
+    normalized = QueryNormalizer.normalize(query).normalized_query
+    assert "Ramesh Kumar Kumar" not in normalized
+    assert "CCTV footage footage" not in normalized
+    assert "Ramesh Kumar" in normalized
+
+
+def test_short_model_answer_is_expanded_with_attributed_evidence_and_limits():
+    from llm.llm_service import LLMService
+    from models.schemas import DocumentChunk
+
+    service = LLMService(provider="local")
+    chunks = [
+        DocumentChunk(
+            chunk_id="witness_p1",
+            document_name="02_Witness_Statements.txt",
+            document_type="Witness Statement",
+            page_number=1,
+            text="At 21:25 HRS, the guard heard a bang. At 21:40 HRS, he saw a person leaving with a briefcase.",
+        ),
+        DocumentChunk(
+            chunk_id="judgment_p1",
+            document_name="08_Court_Judgment.txt",
+            document_type="Court Judgment / Order",
+            page_number=1,
+            text="The prosecution alleged that the accused committed the offence.",
+        ),
+    ]
+    expanded = service._expand_short_answer("The prosecution alleges murder.", "Summarize and assess.", chunks)
+    assert "[02_Witness_Statements.txt, page 1" in expanded
+    assert "21:25 HRS" in expanded
+    assert "does not show a clear verdict" in expanded
+    assert "proven" in expanded
