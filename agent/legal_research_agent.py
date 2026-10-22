@@ -401,15 +401,18 @@ class LegalResearchAgent:
         state.steps[-1].detail = "Response validated via Pydantic model" if not err_msg else f"Validated with fallback ({err_msg})"
 
         # 8. SOURCES & CITATIONS
+        # Preserve metadata from the actual retrieved chunk; do not invent a fixed score/type.
+        chunks_by_id = {chunk.chunk_id: chunk for chunk in chunks}
         state.sources = []
         for idx, src in enumerate(answer_obj.sources, 1):
+            retrieved_chunk = chunks_by_id.get(src.chunk_id)
             state.sources.append({
                 "citation_num": idx,
                 "document_name": src.document_name,
-                "document_type": "Legal Document",
+                "document_type": retrieved_chunk.document_type if retrieved_chunk else "Unknown",
                 "page_number": src.page_number,
                 "chunk_id": src.chunk_id,
-                "score": 0.85,
+                "score": retrieved_chunk.score if retrieved_chunk else None,
                 "excerpt": src.excerpt
             })
 
