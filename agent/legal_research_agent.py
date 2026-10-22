@@ -270,14 +270,20 @@ class LegalResearchAgent:
         )
 
         # 6. EXECUTE LANGCHAIN TOOL CALLING LOOP
-        state.steps.append(WorkflowStep(
+        tool_loop_step = WorkflowStep(
             "Step 6 — LangChain Tool Calling Loop",
             "in_progress",
             "Binding tools to Chat LLM & evaluating tool calls"
-        ))
-        tool_loop_output = self.execute_tool_calling_loop(state.normalized_query, state)
-        state.steps[-1].status = "completed"
-        state.steps[-1].detail = f"Tool calling loop finished with {len(state.executed_tools)} tools executed"
+        )
+        state.steps.append(tool_loop_step)
+        tool_loop_output = self.execute_tool_calling_loop(
+            state.normalized_query, state
+        )
+        tool_loop_step.status = "completed"
+        tool_loop_step.detail = (
+            f"Tool calling loop finished with "
+            f"{len(state.executed_tools)} tools executed"
+        )
 
         # 7. STRUCTURED RESPONSE & PYDANTIC VALIDATION
         state.steps.append(WorkflowStep(
