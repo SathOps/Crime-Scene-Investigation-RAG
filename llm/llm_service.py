@@ -380,7 +380,7 @@ class LLMService:
             if "judgment" in chunk.document_name.lower() or "court" in chunk.document_name.lower()
         )
         if judgment_text and not re.search(
-            r"\\b(convicted|acquitted|guilty|not guilty|final order|the accused is hereby|sentence[d]?)\\b",
+            r"\b(convicted|acquitted|guilty|not guilty|final order|the accused is hereby|sentence[d]?)\b",
             judgment_text, flags=re.I
         ):
             sections.extend([
