@@ -194,8 +194,22 @@ class MultiAgentCoordinator:
     ) -> List[AgentAnalysis]:
         """Run the selected specialists sequentially and retain individual statuses."""
         intent_value = self._intent_value(intent)
+        selected_agents = self.select_agents(intent_value)
+
+        # The repository's "local" provider is a deterministic fallback, not an LLM.
+        # Skip model-backed specialists in that mode rather than marking the workflow failed.
+        if str(getattr(self.llm_service, "provider", "")).lower() == "local":
+            return [
+                AgentAnalysis(
+                    agent_name=agent.agent_name,
+                    status="skipped",
+                    error="Configured local provider is deterministic fallback mode; no LLM is available for specialist reasoning.",
+                )
+                for agent in selected_agents
+            ]
+
         results: List[AgentAnalysis] = []
-        for agent in self.select_agents(intent_value):
+        for agent in selected_agents:
             results.append(agent.run(query, intent_value, evidence_context))
         return results
 
