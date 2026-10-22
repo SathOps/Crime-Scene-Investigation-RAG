@@ -365,6 +365,9 @@ class QueryNormalizer:
         # Step E: Extract dates & times
         dates_times_found = cls._extract_dates_times(text)
 
+        # Remove adjacent duplicate tokens introduced by abbreviation/entity corrections.
+        text = re.sub(r"\\b([\\w#-]+)(\\s+\\1\\b)+", r"\\1", text, flags=re.I)
+
         # Step F: Ensure proper casing & punctuation
         text = text.strip()
         if text:
@@ -376,6 +379,9 @@ class QueryNormalizer:
                     text += "?"
                 else:
                     text += "."
+
+        # Final cleanup prevents aliases creating "Ramesh Kumar Kumar" or "CCTV footage footage".
+        text = re.sub(r"\\b([\\w#-]+)(\\s+\\1\\b)+", r"\\1", text, flags=re.I)
 
         # Deduplicate entities
         entities_found = sorted(list(set(entities_found)))
