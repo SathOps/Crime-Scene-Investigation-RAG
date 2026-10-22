@@ -308,7 +308,7 @@ class LLMService:
                 ):
                     structured_obj.evidence_summary = [
                         f"[{c.document_name}, p. {c.page_number}; chunk {c.chunk_id}] "
-                        + re.sub(r"\\s+", " ", c.text).strip()[:500]
+                        + re.sub(r"\s+", " ", c.text).strip()[:500]
                         for c in chunks
                     ]
                 if len(structured_obj.key_findings) < 3 or all(len(item) < 45 for item in structured_obj.key_findings):
@@ -350,7 +350,7 @@ class LLMService:
             "These points are limited to the passages retrieved for this query. Allegations, witness accounts, forensic observations, and judicial findings are not interchangeable.",
         ]
         for chunk in chunks:
-            excerpt = re.sub(r"\\s+", " ", chunk.text).strip()
+            excerpt = re.sub(r"\s+", " ", chunk.text).strip()
             if excerpt:
                 sections.extend([
                     "",
@@ -375,7 +375,7 @@ class LLMService:
             "## Assessment limits",
             "The retrieved passages support a source-by-source review but do not by themselves justify treating the prosecution's theory as proven. Any discrepancy must be assessed against the full witness statements, complete CCTV report, forensic report, and judgment reasoning. Where those passages were not retrieved, the point remains unresolved.",
         ])
-        return "\\n".join(sections)
+        return "\n".join(sections)
 
     def _synthesize_answer_from_chunks(self, chunks: List[DocumentChunk]) -> str:
         paragraphs = []
@@ -387,7 +387,7 @@ class LLMService:
     def _extract_key_findings_from_chunks(self, chunks: List[DocumentChunk]) -> List[str]:
         findings = []
         for c in chunks:
-            clean = re.sub(r"\\s+", " ", c.text).strip()
+            clean = re.sub(r"\s+", " ", c.text).strip()
             excerpt = clean[:320]
             if len(clean) > 320:
                 excerpt = excerpt.rsplit(" ", 1)[0] + "…"
