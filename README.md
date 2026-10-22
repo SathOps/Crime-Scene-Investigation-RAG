@@ -1,33 +1,29 @@
 # Crime Scene Investigation RAG — Legal Intelligence Platform ⚖️
 
-An advanced, AI-powered **Single-Agent RAG (Retrieval-Augmented Generation)** application engineered for legal case research, evidence synthesis, witness testimony comparison, contradiction analysis, and timeline extraction.
+An advanced, AI-powered **Multi-Agent RAG (Retrieval-Augmented Generation)** application for legal case research, evidence synthesis, witness-testimony comparison, contradiction analysis, and timeline extraction.
 
-Upgraded with **Experiment 3 (LangChain + Multi-Provider LLM Integration)** and **Experiment 4 (Structured Outputs + Pydantic Validation + Session State History & Premium Dark UI)**.
+The system retains the existing retrieval pipeline, LangChain tool-calling workflow, multi-provider LLM service, Pydantic response contract, and Streamlit UI. A new intent-aware coordinator delegates source-grounded analysis to focused specialist agents before final synthesis.
 
-> **Key Architectural Principle**: This system is built around **ONE central AI agent: `LegalResearchAgent`**. It is a single-agent system where `LegalResearchAgent` acts as the central orchestrator, coordinating intent classification, evidence retrieval, LLM reasoning, structured output generation, and Pydantic schema validation.
+> **Key Architectural Principle**: `LegalResearchAgent` remains the workflow coordinator. It normalizes and classifies a query, retrieves case evidence, delegates relevant analysis to specialist agents, and passes their findings to the existing structured-answer generation path. Original retrieved document chunks remain the primary source for citations.
 
 Built with **Python + Streamlit**, following the **AgenticAI Learning Architecture**:
 
 ```text
 Streamlit UI
     ↓
-Python Backend
-    ↓
-LegalResearchAgent (Single Agent / Orchestrator)
-├── Intent Classification
-├── RAGRetriever
-│   └── ChromaDB Vector Store
-├── LangChain Prompt Construction
-│   └── ChatPromptTemplate
-├── LLMService
-│   ├── Ollama (qwen2.5)
-│   ├── Gemini
-│   └── OpenAI
+LegalResearchAgent (Workflow Coordinator)
+├── Query Normalization & Intent Classification
+├── RAGRetriever → ChromaDB Vector Store
+├── MultiAgentCoordinator
+│   ├── Timeline Analysis Agent
+│   ├── Witness & Contradiction Agent
+│   ├── Case Facts Agent
+│   └── Evidence Assessment Agent
+├── Existing LangChain Tool-Calling Loop
+├── LLMService → Ollama / Gemini / OpenAI
 └── Pydantic Validation (LegalResearchAnswer & SourceModel)
     ↓
-WorkflowState
-    ↓
-Streamlit Result UI + Session History
+WorkflowState → Streamlit Result UI + Session History
 ```
 
 > **Disclaimer**: This system is an AI-assisted legal research tool. It provides information based on documents available in its knowledge base and does not constitute formal legal advice.
@@ -134,27 +130,31 @@ Tested across 39 realistic prompts covering all challenge variations:
 
 ---
 
-## 2. Single-Agent Architecture
+## 2. Multi-Agent Architecture
 
-The Crime Scene Investigation RAG system uses **exactly one AI agent**: `LegalResearchAgent`. It is **NOT** a multi-agent system or agent swarm.
-
-`LegalResearchAgent` acts as the central orchestrator/coordinator of the entire legal research workflow. Other modules in the codebase—such as `RAGRetriever`, `LLMService`, `VectorStoreManager`, `LegalTextSplitter`, and Pydantic schemas—are **supporting deterministic services and data structures**, not separate AI agents.
+The multi-agent branch keeps `LegalResearchAgent` as the coordinator and adds a limited set of focused analysis agents. The specialists share the evidence already retrieved by `RAGRetriever`; they do not independently rebuild or re-index the knowledge base.
 
 ```text
 User Query
     ↓
-LegalResearchAgent (Central Coordinator)
+Normalize Query + Classify Intent
     ↓
-Intent Classification
+Retrieve Source Evidence (RAGRetriever + ChromaDB)
     ↓
-RAG Retrieval (RAGRetriever + ChromaDB)
+MultiAgentCoordinator
+    ├── Timeline Analysis Agent
+    ├── Witness & Contradiction Agent
+    ├── Case Facts Agent
+    └── Evidence Assessment Agent
     ↓
-LLM Execution (LLMService via LangChain)
+Existing Tool-Calling Workflow (when relevant)
     ↓
-Pydantic Validation (LegalResearchAnswer)
+Structured Answer Synthesis + Pydantic Validation
     ↓
-Structured Legal Answer (WorkflowState)
+WorkflowState → Streamlit UI
 ```
+
+The coordinator selects specialists according to the existing `IntentType`. Their analyses are secondary reasoning aids: the final answer is still grounded in retrieved source passages, and the Pydantic `LegalResearchAnswer` schema and UI contract remain in place. A specialist-provider failure is recorded in workflow steps and does not, by itself, prevent the original answer-generation path from running.
 
 ---
 
@@ -261,7 +261,12 @@ app.py (Render interactive UI cards & save to st.session_state)
 
 | Component | Is it an Agent? | Responsibility |
 | :--- | :---: | :--- |
-| **`LegalResearchAgent`** | **YES — Single Agent** | Central orchestrator managing intent, retrieval, LLM call, validation, and state packaging. |
+| **`LegalResearchAgent`** | Coordinator | Owns the workflow, intent classification, retrieval, specialist delegation, tool calling, and final state packaging. |
+| **`MultiAgentCoordinator`** | Coordinator | Selects specialists by intent, executes them on shared retrieved evidence, and aggregates successful findings. |
+| **`TimelineAnalysisAgent`** | Specialist agent | Extracts supported events and preserves conflicting timestamps. |
+| **`WitnessContradictionAgent`** | Specialist agent | Compares witness, CCTV, forensic, and other supplied evidence for discrepancies. |
+| **`CaseFactsAgent`** | Specialist agent | Summarizes relevant facts while distinguishing allegations, observations, and findings. |
+| **`EvidenceAssessmentAgent`** | Specialist agent | Identifies directly supported claims, inference, conflicting evidence, and unknowns. |
 | **`RAGRetriever`** | No | Performs similarity searches and calculates chunk relevance scores. |
 | **`VectorStoreManager`** | No | Manages persistent ChromaDB vector collections and embeddings index. |
 | **`EmbeddingService`** | No | Generates text vector embeddings via Sentence-Transformers / HuggingFace. |
@@ -298,26 +303,30 @@ app.py (Render interactive UI cards & save to st.session_state)
 
 ---
 
-## 8. Why Single-Agent Architecture?
+## 8. Why a Coordinated Multi-Agent Architecture?
 
-The project deliberately adopts a **Single-Agent Architecture** because the application has one primary, focused objective: **legal research and evidence analysis across a case knowledge base**.
+Legal case research benefits from focused analyses over the same evidence. A timeline specialist can preserve event order and timestamp disagreements; a witness-and-contradiction specialist can compare statements with CCTV or forensic records; a case-facts specialist can keep allegations distinct from findings; and an evidence-assessment specialist can identify support, inference, and gaps.
 
-A single central agent (`LegalResearchAgent`) can effectively coordinate multiple specialized software components (retriever, vector store, prompt templates, LLM service, Pydantic validator) without the overhead, latency, and non-deterministic behavior of multi-agent negotiation.
-
-```text
-Single Agent System (Implemented)
-    LegalResearchAgent
-           ↓
-   Coordinates Services
- (Retriever, VectorStore, LLMService, Schemas)
-```
-
-*VS.*
+`MultiAgentCoordinator` routes work using the project's existing `IntentType` rather than launching every specialist for every query. The specialists receive the source excerpts already retrieved by `RAGRetriever`, which avoids redundant searches and keeps the evidence boundary explicit.
 
 ```text
-Multi-Agent Swarm (Not Required / Not Implemented)
-   Agent 1 (Search Agent) ➔ Agent 2 (Reasoning Agent) ➔ Agent 3 (Critic Agent)
+LegalResearchAgent (Coordinator)
+    |
+    +--> MultiAgentCoordinator
+             |
+             +--> Timeline Analysis Agent
+             +--> Witness & Contradiction Agent
+             +--> Case Facts Agent
+             +--> Evidence Assessment Agent
+    |
+    +--> Existing Tool-Calling Loop (when relevant)
+    |
+    +--> LLMService Structured Synthesis
+    |
+    +--> Pydantic LegalResearchAnswer + Source Citations
 ```
+
+This is a controlled delegation workflow rather than an unrestricted agent swarm. Specialist outputs are labelled as secondary analysis and appended to the synthesis context; final citations continue to come from the original retrieved chunks. If a specialist call fails, the failure is recorded in `WorkflowState.steps` and the primary RAG response path can continue. The repository's deterministic `local` fallback skips LLM-backed specialists because it is not a generative model.
 
 ---
 
@@ -376,26 +385,28 @@ flowchart TD
 ```mermaid
 flowchart TD
     User([User Query]) --> UI[Streamlit UI - app.py]
-    UI --> Agent[LegalResearchAgent - Single Agent Orchestrator]
-    
-    subgraph Agentic Orchestration & Tool Pipeline
-        Agent --> Intent[Intent Classification]
-        Agent --> Tools[LLM Tool Binding - llm.bind_tools]
-        Tools --> RAGTool[retrieve_case_evidence - RAG Tool]
-        RAGTool --> Ret[RAGRetriever]
-        Ret --> VectorStore[(ChromaDB Vector Store)]
-        VectorStore --> Chunks[Top-K Evidence Chunks]
-        Chunks --> Prompt[LangChain ChatPromptTemplate]
-        Prompt --> LLMService[LLMService Manager]
-        LLMService --> LLM[LLM Provider: Ollama / Gemini / OpenAI]
-    end
-
-    LLM --> JSON[Raw JSON Response]
-    JSON --> Pydantic[Pydantic Validation: LegalResearchAnswer]
-    Pydantic --> State[WorkflowState Object]
-    State --> Session[Streamlit Session State History]
-    Session --> Card[Interactive Result UI Cards]
-    Card --> UI
+    UI --> Coordinator[LegalResearchAgent - Workflow Coordinator]
+    Coordinator --> Normalize[Query Normalization]
+    Normalize --> Intent[Intent Classification]
+    Intent --> Retrieve[RAGRetriever]
+    Retrieve --> Store[(ChromaDB Vector Store)]
+    Store --> Evidence[Retrieved Source Chunks]
+    Evidence --> Specialists[MultiAgentCoordinator]
+    Specialists --> Timeline[Timeline Analysis Agent]
+    Specialists --> Witness[Witness and Contradiction Agent]
+    Specialists --> Facts[Case Facts Agent]
+    Specialists --> Assessment[Evidence Assessment Agent]
+    Timeline --> Findings[Specialist Findings]
+    Witness --> Findings
+    Facts --> Findings
+    Assessment --> Findings
+    Evidence --> Synthesis[LLMService Structured Synthesis]
+    Findings --> Synthesis
+    Coordinator --> Tools[Existing LangChain Tool-Calling Loop]
+    Tools --> Evidence
+    Synthesis --> Schema[Pydantic LegalResearchAnswer]
+    Schema --> State[WorkflowState]
+    State --> UI
 ```
 
 ---
@@ -409,7 +420,8 @@ RAG Agentic Ai/
 │
 ├── agent/
 │   ├── __init__.py
-│   └── legal_research_agent.py # Central Legal Research Agent (LangChain + Pydantic execution)
+│   ├── legal_research_agent.py # Workflow coordinator + existing retrieval/tool/synthesis path
+│   └── specialist_agents.py    # Intent-routed timeline, witness, facts and evidence specialists
 │
 ├── rag/
 │   ├── __init__.py
@@ -438,7 +450,8 @@ RAG Agentic Ai/
 │   └── intent_classifier.py   # Multi-signal semantic intent classification engine
 │
 ├── tests/
-│   └── test_query_understanding.py # 39-prompt evaluation suite (Baseline vs. Improved metrics)
+│   ├── test_query_understanding.py # 39-prompt evaluation suite (Baseline vs. Improved metrics)
+│   └── test_multi_agent.py          # Specialist routing and failure-handling tests
 │
 ├── sample_data/               # Complete Synthetic Criminal Case Legal Dataset (State vs. Ramesh)
 │   ├── 01_FIR_State_vs_Ramesh.txt
@@ -542,7 +555,14 @@ Access the dashboard at `http://localhost:8501`.
 
 ## 14. Automated Testing & Verification
 
-Run the automated verification scripts:
+Run the focused specialist-agent tests (requires `pytest` and Pydantic 2):
+
+```bash
+python -m pip install "pydantic>=2,<3" pytest
+python -m pytest -q tests/test_multi_agent.py
+```
+
+Run the existing automated verification scripts:
 
 ```bash
 # 1. Run Query Understanding Evaluation Suite (39 test cases across 8 challenge categories)
