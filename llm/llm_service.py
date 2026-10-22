@@ -359,3 +359,86 @@ class LLMService:
             limitations=["Information strictly bounded by uploaded case documents."],
             sources=sources
         )
+
+
+    def generate_text_response(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        temperature: float = 0.1
+    ) -> str:
+        """Run a focused text-generation task through the configured LLM provider.
+
+        This method is intended for specialist-agent tasks. It deliberately does not
+        convert failures into fabricated answers; callers should handle provider errors
+        and keep the original retrieval-grounded workflow available as a fallback.
+        """
+        system_prompt = (system_prompt or "").strip()
+        user_prompt = (user_prompt or "").strip()
+        if not system_prompt or not user_prompt:
+            raise ValueError("Both system_prompt and user_prompt are required.")
+
+        if self.provider == "ollama":
+            from langchain_core.messages import HumanMessage, SystemMessage
+            from langchain_ollama import ChatOllama
+
+            model = ChatOllama(
+                model=self.model_name or OLLAMA_MODEL,
+                base_url=self.base_url,
+                temperature=temperature,
+            )
+            response = model.invoke([
+                SystemMessage(content=system_prompt),
+                HumanMessage(content=user_prompt),
+            ])
+            text = getattr(response, "content", response)
+            if isinstance(text, list):
+                text = "\n".join(
+                    str(item.get("text", item)) if isinstance(item, dict) else str(item)
+                    for item in text
+                )
+            result = str(text).strip()
+            if not result:
+                raise RuntimeError("The configured Ollama model returned an empty response.")
+            return result
+
+        if self.provider == "gemini" and self.api_key:
+            from google import genai
+
+            client = genai.Client(api_key=self.api_key)
+            model_name = self.model_name
+            if not model_name or model_name == OLLAMA_MODEL:
+                model_name = "gemini-2.5-flash"
+            response = client.models.generate_content(
+                model=model_name,
+                contents=f"SYSTEM INSTRUCTIONS:\n{system_prompt}\n\nUSER TASK:\n{user_prompt}",
+            )
+            result = (getattr(response, "text", None) or "").strip()
+            if not result:
+                raise RuntimeError("The configured Gemini model returned an empty response.")
+            return result
+
+        if self.provider == "openai" and self.api_key:
+            from openai import OpenAI
+
+            client = OpenAI(api_key=self.api_key)
+            model_name = self.model_name
+            if not model_name or model_name == OLLAMA_MODEL:
+                model_name = "gpt-4o-mini"
+            response = client.chat.completions.create(
+                model=model_name,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt},
+                ],
+                temperature=temperature,
+            )
+            result = (response.choices[0].message.content or "").strip()
+            if not result:
+                raise RuntimeError("The configured OpenAI model returned an empty response.")
+            return result
+
+        raise RuntimeError(
+            f"Specialist text generation is not available for provider '{self.provider}'. "
+            "Choose a configured Ollama, Gemini, or OpenAI provider."
+        )
