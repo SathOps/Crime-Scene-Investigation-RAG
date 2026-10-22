@@ -256,7 +256,11 @@ class LegalResearchAgent:
                 step_status,
                 detail,
             ))
-        specialist_step.status = "completed" if successful_specialists else "failed"
+        specialist_step.status = (
+            "completed"
+            if successful_specialists or not any(result.status == "failed" for result in specialist_results)
+            else "failed"
+        )
         specialist_step.detail = (
             f"Completed {successful_specialists} of {len(specialist_results)} specialist analyses. "
             "Specialist notes are secondary analysis; final synthesis still uses retrieved source passages."
