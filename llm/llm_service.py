@@ -311,7 +311,10 @@ class LLMService:
                         + re.sub(r"\s+", " ", c.text).strip()[:500]
                         for c in chunks
                     ]
-                if len(structured_obj.key_findings) < 3 or all(len(item) < 45 for item in structured_obj.key_findings):
+                if len(structured_obj.key_findings) < 3 or any(
+                    item.strip().startswith("[") and len(item) < 180
+                    for item in structured_obj.key_findings
+                ):
                     structured_obj.key_findings = self._extract_key_findings_from_chunks(chunks)
                 return structured_obj, raw_content, ""
             except ValidationError:
@@ -349,6 +352,7 @@ class LLMService:
             "## Retrieved evidence and cross-source review",
             "These points are limited to the passages retrieved for this query. Allegations, witness accounts, forensic observations, and judicial findings are not interchangeable.",
         ]
+        timeline_items = []
         for chunk in chunks:
             excerpt = re.sub(r"\s+", " ", chunk.text).strip()
             if excerpt:
@@ -357,6 +361,20 @@ class LLMService:
                     f"**Source: {chunk.document_name}, page {chunk.page_number} (chunk {chunk.chunk_id}; {chunk.document_type}).**",
                     excerpt[:1100],
                 ])
+                for match in re.finditer(r"\b\d{1,2}:\d{2}(?::\d{2})?\s*(?:HRS|AM|PM)?\b", excerpt, flags=re.I):
+                    left = max(0, match.start() - 100)
+                    right = min(len(excerpt), match.end() + 140)
+                    timeline_items.append(
+                        f"- {match.group(0)} — {excerpt[left:right]} "
+                        f"[{chunk.document_name}, p. {chunk.page_number}]"
+                    )
+        if timeline_items:
+            sections.extend(["", "## Timeline signals from retrieved records"])
+            sections.extend(timeline_items[:20])
+            sections.extend([
+                "",
+                "These are timestamps reported in different source passages, not automatically a single agreed chronology. Check what each timestamp describes before treating any difference as a contradiction.",
+            ])
         judgment_text = " ".join(
             chunk.text for chunk in chunks
             if "judgment" in chunk.document_name.lower() or "court" in chunk.document_name.lower()
