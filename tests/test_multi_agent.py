@@ -81,3 +81,21 @@ def test_failed_analyses_are_not_included_in_synthesis_context():
 
     assert "Supported fact." in context
     assert "timeout" not in context
+
+
+def test_deterministic_local_provider_skips_llm_specialists():
+    class LocalFallbackService:
+        provider = "local"
+
+        def generate_text_response(self, **kwargs):
+            raise AssertionError("The deterministic fallback must not call an LLM.")
+
+    coordinator = MultiAgentCoordinator(LocalFallbackService())
+    results = coordinator.analyze(
+        query="Summarize the case.",
+        intent=IntentType.CASE_SUMMARY,
+        evidence_context="Source: FIR, page 1.",
+    )
+
+    assert len(results) == 2
+    assert all(result.status == "skipped" for result in results)
