@@ -117,6 +117,22 @@ class IntentClassifier:
         if norm_obj.is_ambiguous:
             return IntentType.UNKNOWN, 0.0
 
+        # Explicit court-outcome or forensic-results requests take precedence over
+        # incidental words such as "contradictions" in a compound query.
+        query_text = (query + " " + norm_obj.normalized_query).lower()
+        asks_court_outcome = any(term in query_text for term in (
+            "court judgment", "court judgement", "final court judgment", "final order",
+            "court findings", "judge findings", "verdict", "acquitted", "convicted"
+        ))
+        asks_forensic_results = any(term in query_text for term in (
+            "forensic findings", "forensic report", "laboratory findings",
+            "forensic results", "ballistic findings", "fingerprint analysis"
+        ))
+        if asks_court_outcome:
+            return IntentType.COURT_FINDINGS, 0.97
+        if asks_forensic_results:
+            return IntentType.EVIDENCE_EVALUATION, 0.95
+
         # Canonical hint match
         if norm_obj.inferred_intent_hint:
             hint = norm_obj.inferred_intent_hint
