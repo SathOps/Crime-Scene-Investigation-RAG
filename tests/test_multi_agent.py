@@ -217,7 +217,7 @@ def test_short_model_answer_is_expanded_with_attributed_evidence_and_limits():
     assert "[02_Witness_Statements.txt, p. 1; Witness Statement]" in expanded
     assert "21:25 HRS" in expanded
     assert "does not establish the operative verdict" in expanded
-    assert "proven" in expanded
+    assert "Conclusions not shown in retrieved source text remain unverified." in expanded
 
 
 
