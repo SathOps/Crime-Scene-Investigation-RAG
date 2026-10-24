@@ -311,6 +311,19 @@ class LLMService:
                     has_results = bool(re.search(r"\b(conclusion|opinion|matched|match found|excluded|identified|consistent with|inconclusive|detected|not detected|positive|negative|analysis revealed)\b", forensic_text, re.I))
                     if forensic_chunks and not has_results:
                         structured_obj.limitations.append("The retrieved forensic excerpt lists items submitted for testing but does not include laboratory results or conclusions.")
+                asks_judgment = any(t in q_lower for t in ("judgment", "judgement", "verdict", "court finding", "final order"))
+                asks_forensics = any(t in q_lower for t in ("forensic", "laboratory findings", "ballistic", "fingerprint", "dna", "g.s.r"))
+                forensic_chunks_for_guard = [c for c in chunks if any(t in (c.document_name + " " + c.document_type).lower() for t in ("forensic", "medical", "laboratory"))]
+                forensic_text_for_guard = " ".join(c.text for c in forensic_chunks_for_guard)
+                has_forensic_results = bool(re.search(r"\b(conclusion|opinion|matched|match found|excluded|identified|consistent with|inconclusive|detected|not detected|positive|negative|analysis revealed)\b", forensic_text_for_guard, re.I))
+                # If the requested primary conclusion is absent, discard the model's
+                # potentially hallucinated narrative and return only attributed excerpts.
+                if (asks_judgment and not has_verdict) or (asks_forensics and not has_forensic_results):
+                    structured_obj.answer = self._expand_short_answer("", query, chunks)
+                    if asks_judgment and not has_verdict:
+                        structured_obj.limitations.append("No explicit court verdict or operative order was present in the retrieved judgment passages.")
+                    if asks_forensics and not has_forensic_results:
+                        structured_obj.limitations.append("No actual forensic test results or conclusions were present in the retrieved forensic passages.")
                 if (
                     not structured_obj.evidence_summary
                     or (
