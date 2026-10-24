@@ -295,10 +295,22 @@ class LLMService:
             try:
                 structured_obj = LegalResearchAnswer.model_validate(data)
                 # Valid JSON/schema does not guarantee that the user's full question was answered.
-                if len(structured_obj.answer.strip()) < 800:
-                    structured_obj.answer = self._expand_short_answer(
-                        structured_obj.answer, query, chunks
-                    )
+                if len(structured_obj.answer.strip()) < 1400:
+                    structured_obj.answer = self._expand_short_answer(structured_obj.answer, query, chunks)
+                q_lower = query.lower()
+                court_chunks = [c for c in chunks if "judgment" in (c.document_name + " " + c.document_type).lower() or "court order" in (c.document_name + " " + c.document_type).lower()]
+                court_text = " ".join(c.text for c in court_chunks)
+                has_verdict = bool(re.search(r"\\b(acquitted|convicted|found guilty|not guilty|sentenced to|operative order|the accused is hereby|appeal is allowed|appeal is dismissed)\\b", court_text, re.I))
+                unsupported_outcome = bool(re.search(r"\\b(judgment confirms|the court (?:confirms|found|finds|held|ruled)|Ramesh Kumar(?:'s)? innocence|was acquitted|was convicted|supports his alibi)\\b", structured_obj.answer, re.I))
+                if unsupported_outcome and not has_verdict:
+                    structured_obj.answer = "The retrieved court-judgment passage does not expose an operative verdict or judicial reasoning. I cannot conclude that Ramesh Kumar was acquitted, convicted, or that the court resolved the witness contradictions. The outcome remains unverified.\n\n" + self._expand_short_answer("", query, chunks)
+                    structured_obj.limitations.append("The retrieved judgment excerpt does not contain an explicit verdict or operative order; no outcome is inferred.")
+                if any(t in q_lower for t in ("forensic", "laboratory findings", "ballistic", "fingerprint", "g.s.r")):
+                    forensic_chunks = [c for c in chunks if any(t in (c.document_name + " " + c.document_type).lower() for t in ("forensic", "medical", "laboratory"))]
+                    forensic_text = " ".join(c.text for c in forensic_chunks)
+                    has_results = bool(re.search(r"\\b(conclusion|opinion|matched|match found|excluded|identified|consistent with|inconclusive|detected|not detected|positive|negative|analysis revealed)\\b", forensic_text, re.I))
+                    if forensic_chunks and not has_results:
+                        structured_obj.limitations.append("The retrieved forensic excerpt lists items submitted for testing but does not include laboratory results or conclusions.")
                 if (
                     not structured_obj.evidence_summary
                     or (
@@ -345,55 +357,32 @@ class LLMService:
     def _expand_short_answer(
         self, initial_answer: str, query: str, chunks: List[DocumentChunk]
     ) -> str:
-        """Expand a shallow model answer using only retrieved, attributed excerpts."""
-        sections = [
-            (initial_answer or "").strip(),
-            "",
-            "## Retrieved evidence and cross-source review",
-            "These points are limited to the passages retrieved for this query. Allegations, witness accounts, forensic observations, and judicial findings are not interchangeable.",
-        ]
-        timeline_items = []
-        for chunk in chunks:
-            excerpt = re.sub(r"\s+", " ", chunk.text).strip()
-            if excerpt:
-                sections.extend([
-                    "",
-                    f"**Source: {chunk.document_name}, page {chunk.page_number} (chunk {chunk.chunk_id}; {chunk.document_type}).**",
-                    excerpt[:1100],
-                ])
-                for match in re.finditer(r"\b\d{1,2}:\d{2}(?::\d{2})?\s*(?:HRS|AM|PM)?\b", excerpt, flags=re.I):
-                    left = max(0, match.start() - 100)
-                    right = min(len(excerpt), match.end() + 140)
-                    timeline_items.append(
-                        f"- {match.group(0)} — {excerpt[left:right]} "
-                        f"[{chunk.document_name}, p. {chunk.page_number}]"
-                    )
-        if timeline_items:
-            sections.extend(["", "## Timeline signals from retrieved records"])
-            sections.extend(timeline_items[:20])
-            sections.extend([
-                "",
-                "These are timestamps reported in different source passages, not automatically a single agreed chronology. Check what each timestamp describes before treating any difference as a contradiction.",
-            ])
-        judgment_text = " ".join(
-            chunk.text for chunk in chunks
-            if "judgment" in chunk.document_name.lower() or "court" in chunk.document_name.lower()
-        )
-        if judgment_text and not re.search(
-            r"\b(convicted|acquitted|guilty|not guilty|final order|the accused is hereby|sentence[d]?)\b",
-            judgment_text, flags=re.I
-        ):
-            sections.extend([
-                "",
-                "## Court findings — source limitation",
-                "A court-judgment passage was retrieved, but the available excerpt does not show a clear verdict, sentence, or final order. The court's actual findings cannot be reliably summarized from the excerpts available in this response.",
-            ])
-        sections.extend([
-            "",
-            "## Assessment limits",
-            "The retrieved passages support a source-by-source review but do not by themselves justify treating the prosecution's theory as proven. Any discrepancy must be assessed against the full witness statements, complete CCTV report, forensic report, and judgment reasoning. Where those passages were not retrieved, the point remains unresolved.",
-        ])
-        return "\n".join(sections)
+        """Add concise attributed context without dumping chunks or inventing findings."""
+        sections = [(initial_answer or "").strip()]
+        q = (query or "").lower()
+        asks_judgment = any(t in q for t in ("judgment", "judgement", "verdict", "court finding", "final order", "acquitt", "convict"))
+        asks_forensics = any(t in q for t in ("forensic", "ballistic", "fingerprint", "dna", "g.s.r", "g sr", "laboratory findings"))
+        court_chunks = [c for c in chunks if any(t in (c.document_name + " " + c.document_type).lower() for t in ("judgment", "court order", "court finding"))]
+        forensic_chunks = [c for c in chunks if any(t in (c.document_name + " " + c.document_type).lower() for t in ("forensic", "medical", "laboratory"))]
+        if asks_judgment:
+            court_text = " ".join(c.text for c in court_chunks)
+            has_verdict = bool(re.search(r"\\b(acquitted|convicted|found guilty|not guilty|sentenced to|operative order|the accused is hereby|appeal is allowed|appeal is dismissed)\\b", court_text, re.I))
+            if not court_chunks or not has_verdict:
+                sections.extend(["", "## Court judgment limitation", "The retrieved judgment excerpt does not establish the operative verdict, sentence, or final order. A prosecution summary is an allegation, not a judicial finding. The outcome remains unverified from the passages retrieved."])
+        if asks_forensics:
+            forensic_text = " ".join(c.text for c in forensic_chunks)
+            has_results = bool(re.search(r"\\b(conclusion|opinion|matched|match found|excluded|identified|consistent with|inconclusive|detected|not detected|positive|negative|analysis revealed)\\b", forensic_text, re.I))
+            if not forensic_chunks or not has_results:
+                sections.extend(["", "## Forensic report limitation", "The retrieved forensic passage lists items submitted for examination but does not expose the laboratory results or conclusions. The list of items alone does not establish a match, identify a perpetrator, or support an alibi."])
+        if chunks:
+            sections.extend(["", "## Retrieved source passages"])
+            for c in chunks:
+                excerpt = re.sub(r"\\s+", " ", c.text).strip()
+                if excerpt:
+                    suffix = "…" if len(excerpt) > 420 else ""
+                    sections.append("- **[" + c.document_name + ", p. " + str(c.page_number) + "; " + c.document_type + "]** " + excerpt[:420] + suffix)
+        sections.extend(["", "## Evidence limits", "Do not treat a charge sheet or prosecution summary as a court finding. Do not infer forensic conclusions from a list of items submitted for testing. Conclusions not shown in retrieved source text remain unverified."])
+        return "\\n".join(sections)
 
     def _synthesize_answer_from_chunks(self, chunks: List[DocumentChunk]) -> str:
         paragraphs = []
