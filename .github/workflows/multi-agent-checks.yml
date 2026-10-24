@@ -24,7 +24,7 @@ jobs:
       - name: Install lightweight test dependencies
         run: |
           python -m pip install --upgrade pip
-          python -m pip install "pydantic>=2,<3" pytest numpy chromadb langchain-core langchain-ollama
+          python -m pip install "pydantic>=2,<3" pytest numpy chromadb langchain-core langchain-ollama pypdf python-docx
 
       - name: Compile project Python files
         run: python -m compileall -q agent llm models rag utils tests
