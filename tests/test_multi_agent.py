@@ -216,5 +216,49 @@ def test_short_model_answer_is_expanded_with_attributed_evidence_and_limits():
     expanded = service._expand_short_answer("The prosecution alleges murder.", "Summarize and assess.", chunks)
     assert "[02_Witness_Statements.txt, page 1" in expanded
     assert "21:25 HRS" in expanded
-    assert "does not show a clear verdict" in expanded
+    assert "does not establish the operative verdict" in expanded
     assert "proven" in expanded
+
+
+
+def test_court_judgment_request_is_classified_as_court_findings():
+    from utils.intent_classifier import IntentClassifier
+    from models.schemas import IntentType
+
+    intent, confidence = IntentClassifier.classify(
+        "Retrieve the forensic findings and final court judgment. Do not infer a verdict from the charge sheet."
+    )
+    assert intent == IntentType.COURT_FINDINGS
+    assert confidence >= 0.9
+
+
+def test_forensic_and_judgment_short_answer_states_missing_results_explicitly():
+    from llm.llm_service import LLMService
+    from models.schemas import DocumentChunk
+
+    service = LLMService(provider="local")
+    chunks = [
+        DocumentChunk(
+            chunk_id="forensic_header",
+            document_name="04_Forensic_Lab_Report.txt",
+            document_type="Forensic / Medical Report",
+            page_number=1,
+            text="STATE FORENSIC SCIENCE LABORATORY. Evidence Item-A: spent shell casing. LABORATORY FINDINGS:",
+        ),
+        DocumentChunk(
+            chunk_id="judgment_header",
+            document_name="08_Court_Judgment.txt",
+            document_type="Court Judgment / Order",
+            page_number=1,
+            text="JUDGMENT & FINAL ORDER: Prosecution alleged that the accused committed murder.",
+        ),
+    ]
+    expanded = service._expand_short_answer(
+        "The court confirms the accused is innocent and forensic evidence supports his alibi.",
+        "Summarize forensic findings and the final court judgment.",
+        chunks,
+    )
+    assert "does not establish the operative verdict" in expanded
+    assert "does not expose the laboratory results or conclusions" in expanded
+    assert "prosecution summary is an allegation" in expanded
+    assert len(expanded) < 3000
