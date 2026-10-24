@@ -477,6 +477,8 @@ class LLMService:
                 model=self.model_name or OLLAMA_MODEL,
                 base_url=self.base_url,
                 temperature=temperature,
+                timeout=45,
+                num_predict=192,
             )
             response = model.invoke([
                 SystemMessage(content=system_prompt),
