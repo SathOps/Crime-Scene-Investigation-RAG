@@ -216,7 +216,7 @@ def test_short_model_answer_is_expanded_with_attributed_evidence_and_limits():
     expanded = service._expand_short_answer("The prosecution alleges murder.", "Summarize and assess the court judgment.", chunks)
     assert "[02_Witness_Statements.txt, p. 1; Witness Statement]" in expanded
     assert "21:25 HRS" in expanded
-    assert "does not establish the operative verdict" in expanded
+    assert "do not establish an operative verdict or sentence" in expanded
     assert "Conclusions not shown in retrieved source text remain unverified." in expanded
 
 
@@ -259,6 +259,6 @@ def test_forensic_and_judgment_short_answer_states_missing_results_explicitly():
         chunks,
     )
     assert "does not establish the operative verdict" in expanded
-    assert "does not expose the laboratory results or conclusions" in expanded
+    assert "do not expose forensic laboratory results or conclusions" in expanded
     assert "prosecution summary is an allegation" in expanded
     assert len(expanded) < 3000
