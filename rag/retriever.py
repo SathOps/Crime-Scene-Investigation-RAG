@@ -68,11 +68,27 @@ class RAGRetriever:
                 if ent in chunk_lower:
                     entity_boost += 0.20
 
-            # Document-specific contextual boost (e.g. CCTV report when CCTV is asked)
-            if "cctv" in search_query.lower() and "cctv" in chunk.document_name.lower():
+            # Topic-aware boosts prefer substantive result/order passages over headers.
+            q_lower = search_query.lower()
+            doc_lower = (chunk.document_name + " " + chunk.document_type).lower()
+            if "cctv" in q_lower and "cctv" in doc_lower:
                 entity_boost += 0.15
-            if ("witness" in search_query.lower() or "guard" in search_query.lower()) and "witness" in chunk.document_name.lower():
+            if ("witness" in q_lower or "guard" in q_lower) and "witness" in doc_lower:
                 entity_boost += 0.15
+            if any(term in q_lower for term in ("judgment", "judgement", "verdict", "court finding", "final order")):
+                if "judgment" in doc_lower or "court" in doc_lower:
+                    entity_boost += 0.22
+                    if any(marker in chunk_lower for marker in ("final order", "the court finds", "the court held", "ordered that", "acquitted", "convicted", "sentence", "reasons for decision", "findings of the court", "operative order")):
+                        entity_boost += 0.28
+                    if "prosecution case summary" in chunk_lower:
+                        entity_boost -= 0.12
+            if any(term in q_lower for term in ("forensic", "laboratory findings", "ballistic", "fingerprint", "dna", "g.s.r", "g sr")):
+                if any(term in doc_lower for term in ("forensic", "laboratory", "medical")):
+                    entity_boost += 0.22
+                    if any(marker in chunk_lower for marker in ("conclusion", "opinion", "matched", "excluded", "identified", "consistent with", "inconclusive", "detected", "not detected", "analysis revealed", "results:")):
+                        entity_boost += 0.28
+                    if chunk_lower.rstrip().endswith("laboratory findings:"):
+                        entity_boost -= 0.10
             
             # Timestamp matching boost (e.g. 21:25, 21:10, 21:40)
             timestamps_in_query = re.findall(r'\b\d{1,2}:\d{2}\b', search_query.lower())
@@ -133,6 +149,21 @@ class RAGRetriever:
         else:
             strength = "Insufficient"
 
+        # Similarity alone is not enough for a conclusion-specific legal question.
+        q_lower = search_query.lower()
+        if any(term in q_lower for term in ("judgment", "judgement", "verdict", "court finding", "final order")):
+            court_text = " ".join(c.text.lower() for c in deduped_chunks
+                                  if "judgment" in (c.document_name + " " + c.document_type).lower()
+                                  or "court" in (c.document_name + " " + c.document_type).lower())
+            if not re.search(r"\b(acquitted|convicted|found guilty|not guilty|sentenced to|operative order|the court held|the court finds)\b", court_text):
+                strength = "Low" if strength != "Insufficient" else strength
+        if any(term in q_lower for term in ("forensic", "laboratory findings", "ballistic", "fingerprint", "dna", "g.s.r", "g sr")):
+            forensic_text = " ".join(c.text.lower() for c in deduped_chunks
+                                     if any(t in (c.document_name + " " + c.document_type).lower()
+                                            for t in ("forensic", "laboratory", "medical")))
+            if not re.search(r"\b(conclusion|opinion|matched|excluded|identified|consistent with|inconclusive|detected|not detected|positive|negative|analysis revealed)\b", forensic_text):
+                strength = "Low" if strength != "Insufficient" else strength
+
         return deduped_chunks, strength
 
     def _extract_query_keywords(self, query: str) -> List[str]:
@@ -159,11 +190,24 @@ class RAGRetriever:
             sub_queries.append("Accused statement Ramesh Kumar alibi Blue Dart Cafe Aundh")
             sub_queries.append("Call Detail Records CDR cell tower Shivajinagar")
 
-        # Forensic weapon / casing match
-        if "weapon" in q_lower or "gun" in q_lower or "casing" in q_lower or "9mm" in q_lower:
-            sub_queries.append("Forensic Lab Report 9mm spent shell casing Item-A Item-B")
+        # Target the actual findings/results, not only the report header.
+        if any(term in q_lower for term in ("forensic", "laboratory findings", "ballistic", "fingerprint", "dna", "g.s.r", "g sr")):
+            sub_queries.extend([
+                "04_Forensic_Lab_Report laboratory findings results conclusion opinion",
+                "forensic laboratory analysis results matched excluded detected not detected",
+            ])
 
-        return sub_queries
+        # Target the operative order and judicial reasoning separately from the prosecution summary.
+        if any(term in q_lower for term in ("judgment", "judgement", "verdict", "court finding", "final order", "acquitted", "convicted")):
+            sub_queries.extend([
+                "08_Court_Judgment final order court findings reasons verdict acquitted convicted sentence",
+                "judgment court held finds ordered accused guilty not guilty final decision",
+            ])
+
+        if "weapon" in q_lower or "gun" in q_lower or "casing" in q_lower or "9mm" in q_lower:
+            sub_queries.append("Forensic Lab Report 9mm spent shell casing Item-A Item-B laboratory results")
+
+        return list(dict.fromkeys(sub_queries))
 
     def format_chunks_for_context(self, chunks: List[DocumentChunk]) -> str:
         if not chunks:
