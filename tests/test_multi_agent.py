@@ -213,7 +213,7 @@ def test_short_model_answer_is_expanded_with_attributed_evidence_and_limits():
             text="The prosecution alleged that the accused committed the offence.",
         ),
     ]
-    expanded = service._expand_short_answer("The prosecution alleges murder.", "Summarize and assess.", chunks)
+    expanded = service._expand_short_answer("The prosecution alleges murder.", "Summarize and assess the court judgment.", chunks)
     assert "[02_Witness_Statements.txt, page 1" in expanded
     assert "21:25 HRS" in expanded
     assert "does not establish the operative verdict" in expanded
