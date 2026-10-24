@@ -318,12 +318,13 @@ class LLMService:
                 has_forensic_results = bool(re.search(r"\b(conclusion|opinion|matched|match found|excluded|identified|consistent with|inconclusive|detected|not detected|positive|negative|analysis revealed)\b", forensic_text_for_guard, re.I))
                 # If the requested primary conclusion is absent, discard the model's
                 # potentially hallucinated narrative and return only attributed excerpts.
-                if (asks_judgment and not has_verdict) or (asks_forensics and not has_forensic_results):
+                judgment_reports_forensics = bool(re.search(r"\b(gunshot residue|GSR|footwear impression|fingerprint|postmortem report|forensic evidence)\b", court_text, re.I))
+                if (asks_judgment and not has_verdict) or (asks_forensics and not has_forensic_results and not judgment_reports_forensics):
                     structured_obj.answer = self._expand_short_answer("", query, chunks)
                     if asks_judgment and not has_verdict:
                         structured_obj.limitations.append("No explicit court verdict or operative order was present in the retrieved judgment passages.")
                     if asks_forensics and not has_forensic_results:
-                        structured_obj.limitations.append("No actual forensic test results or conclusions were present in the retrieved forensic passages.")
+                        structured_obj.limitations.append("Original forensic/laboratory results were not retrieved; forensic claims appearing in the judgment are attributed to that judgment and are not independently verified against the original report.")
                 if (
                     not structured_obj.evidence_summary
                     or (
@@ -377,16 +378,18 @@ class LLMService:
         asks_forensics = any(t in q for t in ("forensic", "ballistic", "fingerprint", "dna", "g.s.r", "g sr", "laboratory findings"))
         court_chunks = [c for c in chunks if any(t in (c.document_name + " " + c.document_type).lower() for t in ("judgment", "court order", "court finding"))]
         forensic_chunks = [c for c in chunks if any(t in (c.document_name + " " + c.document_type).lower() for t in ("forensic", "medical", "laboratory"))]
-        if asks_judgment:
-            court_text = " ".join(c.text for c in court_chunks)
-            has_verdict = bool(re.search(r"\b(acquitted|convicted|found guilty|not guilty|sentenced to|operative order|the accused is hereby|appeal is allowed|appeal is dismissed)\b", court_text, re.I))
-            if not court_chunks or not has_verdict:
-                sections.extend(["", "## Court judgment limitation", "The retrieved judgment excerpt does not establish the operative verdict, sentence, or final order. A prosecution summary is an allegation, not a judicial finding. The outcome remains unverified from the passages retrieved."])
-        if asks_forensics:
-            forensic_text = " ".join(c.text for c in forensic_chunks)
-            has_results = bool(re.search(r"\b(conclusion|opinion|matched|match found|excluded|identified|consistent with|inconclusive|detected|not detected|positive|negative|analysis revealed)\b", forensic_text, re.I))
-            if not forensic_chunks or not has_results:
-                sections.extend(["", "## Forensic report limitation", "The retrieved forensic passage lists items submitted for examination but does not expose the laboratory results or conclusions. The list of items alone does not establish a match, identify a perpetrator, or support an alibi."])
+        court_text = " ".join(c.text for c in court_chunks)
+        has_verdict = bool(re.search(r"\b(acquitted|convicted|found guilty|not guilty|sentenced to|operative order|the accused is hereby|appeal is allowed|appeal is dismissed)\b", court_text, re.I))
+        if asks_judgment and (not court_chunks or not has_verdict):
+            sections.extend(["", "## Court judgment limitation", "The retrieved judgment passages do not establish an operative verdict or sentence. A prosecution summary is an allegation, not a judicial finding; the outcome remains unverified from the retrieved passages."])
+        forensic_text = " ".join(c.text for c in forensic_chunks)
+        has_results = bool(re.search(r"\b(conclusion|opinion|matched|match found|excluded|identified|consistent with|inconclusive|detected|not detected|positive|negative|analysis revealed)\b", forensic_text, re.I))
+        judgment_reports_forensics = bool(re.search(r"\b(gunshot residue|GSR|footwear impression|fingerprint|postmortem report|forensic evidence)\b", court_text, re.I))
+        if asks_forensics and not has_results:
+            if judgment_reports_forensics:
+                sections.extend(["", "## Forensic evidence limitation", "The retrieved court judgment describes forensic findings, including the tests or comparisons it reports. However, the underlying forensic/laboratory report was not retrieved, so those claims can be attributed to the judgment but cannot be independently checked against the original report."])
+            else:
+                sections.extend(["", "## Forensic report limitation", "The retrieved passages do not expose forensic laboratory results or conclusions. Do not infer a match, identify a perpetrator, or support an alibi from a list of submitted items."])
         if chunks:
             sections.extend(["", "## Retrieved source passages"])
             for c in chunks:
