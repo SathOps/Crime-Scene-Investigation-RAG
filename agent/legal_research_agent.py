@@ -1,6 +1,7 @@
 import re
 import json
 import logging
+import time
 from typing import List, Dict, Any, Tuple, Optional, Callable
 from langchain_core.messages import HumanMessage, AIMessage, ToolMessage, SystemMessage
 
@@ -217,6 +218,7 @@ class LegalResearchAgent:
                 except Exception:
                     logger.debug("Progress callback failed", exc_info=True)
 
+        workflow_started = time.perf_counter()
         state = WorkflowState(query=query)
         report("Query received; normalizing and classifying intent.")
 
@@ -268,6 +270,9 @@ class LegalResearchAgent:
                 "Deterministic hypothetical answer conforms to LegalResearchAnswer schema."
             ))
             state.status = "Completed"
+            state.metrics["total_duration_seconds"] = round(time.perf_counter() - workflow_started, 3)
+            state.metrics["specialist_agents_completed"] = 0
+            state.metrics["source_count"] = 0
             return state
 
         # 4. RAG EVIDENCE RETRIEVAL (Hybrid Search & Entity Preservation)
@@ -277,13 +282,27 @@ class LegalResearchAgent:
             "in_progress",
             f"Querying vector store (Top K = {top_k}) with preserved entities: {norm_obj.entities_preserved}"
         ))
-        chunks, strength = self.retriever.retrieve_evidence(
-            query=query,
+        retrieval_started = time.perf_counter()
+        try:
+            chunks, strength = self.retriever.retrieve_evidence(
+                query=query,
             top_k=top_k,
             normalized_query=state.normalized_query,
             entities=norm_obj.entities_preserved,
-            intent=state.intent.value
-        )
+                intent=state.intent.value
+            )
+        except Exception as exc:
+            logger.exception("Evidence retrieval failed")
+            state.steps[-1].status = "failed"
+            state.steps[-1].detail = f"Evidence retrieval failed: {type(exc).__name__}: {exc}"
+            state.status = "Failed"
+            state.response = "The research workflow could not retrieve case evidence. Check the vector-store and embedding service configuration, then retry."
+            state.validation_error = f"{type(exc).__name__}: {exc}"
+            state.metrics["total_duration_seconds"] = round(time.perf_counter() - workflow_started, 3)
+            state.metrics["retrieval_duration_seconds"] = round(time.perf_counter() - retrieval_started, 3)
+            report("Evidence retrieval failed; workflow stopped safely.")
+            return state
+        state.metrics["retrieval_duration_seconds"] = round(time.perf_counter() - retrieval_started, 3)
         state.retrieved_chunks = chunks
         state.evidence_strength = strength
 
@@ -311,6 +330,8 @@ class LegalResearchAgent:
             state.response = answer_obj.answer
             state.steps.append(WorkflowStep("Step 5 — Clarification Check", "completed", "Requested user clarification"))
             state.status = "Completed"
+            state.metrics["total_duration_seconds"] = round(time.perf_counter() - workflow_started, 3)
+            state.metrics["source_count"] = 0
             return state
 
         # 5. MULTI-AGENT SPECIALIST ANALYSIS
@@ -322,14 +343,19 @@ class LegalResearchAgent:
         state.steps.append(specialist_step)
 
         specialist_context = self.retriever.format_chunks_for_context(chunks)
+        specialist_started = time.perf_counter()
         specialist_results = self.multi_agent_coordinator.analyze(
             query=state.normalized_query,
             intent=state.intent,
             evidence_context=specialist_context,
         )
+        state.metrics["specialist_duration_seconds"] = round(time.perf_counter() - specialist_started, 3)
         successful_specialists = sum(
             1 for result in specialist_results if result.status == "completed"
         )
+        state.metrics["specialist_agents_selected"] = len(specialist_results)
+        state.metrics["specialist_agents_completed"] = successful_specialists
+        state.metrics["specialist_agents_failed"] = sum(1 for result in specialist_results if result.status == "failed")
         for result in specialist_results:
             if result.status == "completed":
                 step_status = "completed"
@@ -383,20 +409,25 @@ class LegalResearchAgent:
             "Generating and validating final response"
         ))
         
+        synthesis_started = time.perf_counter()
+        supplemental_notes = specialist_analysis_notes
+        if tool_loop_output and tool_loop_output.strip():
+            supplemental_notes = (supplemental_notes + "\\n\\n" if supplemental_notes else "") + "[Tool-loop model output — secondary analysis, verify against source excerpts]\\n" + tool_loop_output.strip()
         answer_obj, raw_resp, err_msg = self.llm_service.generate_structured_response(
             query=query,
             intent=state.intent,
             retrieved_chunks=chunks,
             evidence_strength=strength,
             normalized_query=state.normalized_query,
-            # Specialist/tool output remains in the execution trace, not primary synthesis evidence.
-            analysis_notes="",
+            # Secondary notes can guide synthesis but are never primary evidence or citations.
+            analysis_notes=supplemental_notes,
         )
 
         state.structured_answer = answer_obj
         state.raw_model_response = raw_resp
         state.validation_error = err_msg
         state.response = answer_obj.answer
+        state.metrics["synthesis_duration_seconds"] = round(time.perf_counter() - synthesis_started, 3)
         state.steps[-1].status = "completed"
         state.steps[-1].detail = "Response validated via Pydantic model" if not err_msg else f"Validated with fallback ({err_msg})"
 
@@ -417,6 +448,10 @@ class LegalResearchAgent:
             })
 
         state.steps.append(WorkflowStep("Step 8 — Sources & Citations", "completed", f"{len(state.sources)} verifiable source references attached"))
+        state.metrics["source_count"] = len(state.sources)
+        state.metrics["retrieved_chunk_count"] = len(chunks)
+        state.metrics["executed_tool_count"] = len(state.executed_tools)
+        state.metrics["total_duration_seconds"] = round(time.perf_counter() - workflow_started, 3)
         state.status = "Completed"
         report("Research workflow completed; sources and validation results are ready.")
 
