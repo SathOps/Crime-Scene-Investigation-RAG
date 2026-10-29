@@ -1432,8 +1432,7 @@ with tab_research:
                         state="error",
                         expanded=True,
                     )
-                    st.error(f"Research failed: {exc}")
-                    raise
+                    st.error(f"Research failed safely: {type(exc).__name__}: {exc}")
 
                 status_container.update(
                     label="✓ Analysis Complete — Pipeline Synchronized",
@@ -1505,6 +1504,14 @@ with tab_research:
             </div>
         </div>
         """)
+
+        # Runtime metrics are measured by the workflow, not estimated.
+        runtime_metrics = getattr(state, "metrics", {}) or {}
+        metric_cols = st.columns(4)
+        metric_cols[0].metric("Total runtime", f"{runtime_metrics.get('total_duration_seconds', 0):.2f}s")
+        metric_cols[1].metric("Retrieved chunks", int(runtime_metrics.get("retrieved_chunk_count", len(state.retrieved_chunks))))
+        metric_cols[2].metric("Agents completed", int(runtime_metrics.get("specialist_agents_completed", 0)))
+        metric_cols[3].metric("Citations", int(runtime_metrics.get("source_count", len(state.sources))))
 
         # Meta pills
         st.html(f"""
@@ -1743,7 +1750,7 @@ with tab_history:
             h_intent = h_state.intent.value if hasattr(h_state.intent, 'value') else h_state.intent
 
             interaction_num = len(st.session_state.history) - idx
-            with st.expander(f"{item['timestamp']}  |  {h_intent.replace('_',' ').title()}  |  {item['query'][:80]}"):
+            with st.expander(f"{item['timestamp']}  |  {h_intent.replace('_',' ').title()}  |  {str(item['query'])[:80]}"):
                 # Meta
                 st.markdown(f"""
                 <div class="meta-pills">
@@ -1757,7 +1764,7 @@ with tab_history:
                     st.markdown(f"""
                     <div class="answer-surface" style="margin-top:12px;">
                         <div class="answer-label">Response</div>
-                        <div class="answer-text" style="margin-top:8px;">{h_ans.get('answer', '')}</div>
+                        <div class="answer-text" style="margin-top:8px;">{html.escape(str(h_ans.get('answer', '')))}</div>
                     </div>
                     """, unsafe_allow_html=True)
 
@@ -1818,7 +1825,7 @@ with tab_documents:
             st.markdown(f"""
             <div class="doc-card">
                 <div class="doc-type">{ext}</div>
-                <div class="doc-name">{doc_name}</div>
+                <div class="doc-name">{html.escape(str(doc_name))}</div>
                 <div class="doc-status">Ready</div>
             </div>
             """, unsafe_allow_html=True)
