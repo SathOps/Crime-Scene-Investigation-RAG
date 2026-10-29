@@ -262,3 +262,39 @@ def test_forensic_and_judgment_short_answer_states_missing_results_explicitly():
     assert "do not expose forensic laboratory results or conclusions" in expanded
     assert "prosecution summary is an allegation" in expanded
     assert len(expanded) < 3000
+
+
+def test_insufficient_retrieval_skips_specialists_and_tool_loop():
+    from agent.legal_research_agent import LegalResearchAgent
+
+    class EmptyRetriever:
+        def retrieve_evidence(self, *args, **kwargs):
+            return [], "Insufficient"
+
+        def format_chunks_for_context(self, chunks):
+            return ""
+
+    class LocalLLM:
+        provider = "local"
+
+        def generate_structured_response(self, **kwargs):
+            from models.schemas import LegalResearchAnswer
+            answer = LegalResearchAnswer(
+                query=kwargs["query"],
+                normalized_query=kwargs.get("normalized_query"),
+                intent=kwargs["intent"].value,
+                answer="Insufficient evidence in the knowledge base.",
+                limitations=["No supporting passages were retrieved."],
+            )
+            return answer, answer.model_dump_json(), ""
+
+        def generate_text_response(self, **kwargs):
+            raise AssertionError("No specialist call should run without evidence.")
+
+    agent = LegalResearchAgent(EmptyRetriever(), LocalLLM())
+    state = agent.run_workflow("Summarize the uploaded case")
+
+    assert state.status == "Completed"
+    assert state.metrics["specialist_agents_selected"] == 0
+    assert state.metrics["retrieved_chunk_count"] == 0
+    assert any(step.step_name == "Step 5 — Evidence Sufficiency Gate" for step in state.steps)
