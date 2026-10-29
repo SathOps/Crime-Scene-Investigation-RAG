@@ -20,7 +20,7 @@ from rag.embeddings import EmbeddingService
 from rag.vector_store import VectorStoreManager
 from rag.retriever import RAGRetriever
 from llm.llm_service import LLMService
-from agent.legal_research_agent import LegalResearchAgent
+from agent.legal_research_agent import LegalResearchAgent, is_standalone_hypothetical_query
 from utils.helpers import state_to_json, format_file_size
 
 # ─────────────────────────────────────────────
@@ -1409,8 +1409,8 @@ with tab_research:
         st.session_state.preset_query = ""
         if not user_query or not user_query.strip():
             st.warning("Please enter a valid research question.")
-        elif stats['total_chunks'] == 0:
-            st.warning("Knowledge base is empty. Upload documents or load samples from the sidebar.")
+        elif stats['total_chunks'] == 0 and not is_standalone_hypothetical_query(user_query):
+            st.warning("Knowledge base is empty. Upload documents or load samples from the sidebar, or ask a clearly self-contained hypothetical question.")
         else:
             # Live workflow progress: update the status as real pipeline stages finish.
             with st.status("AGENT WORKFLOW IN PROGRESS...", expanded=True) as status_container:
@@ -1434,11 +1434,20 @@ with tab_research:
                     )
                     st.error(f"Research failed safely: {type(exc).__name__}: {exc}")
 
-                status_container.update(
-                    label="✓ Analysis Complete — Pipeline Synchronized",
-                    state="complete",
-                    expanded=False,
-                )
+                if state.status == "Completed":
+                    status_container.update(
+                        label="✓ Analysis Complete",
+                        state="complete",
+                        expanded=False,
+                    )
+                else:
+                    status_container.update(
+                        label="Research stopped safely — see the error details below",
+                        state="error",
+                        expanded=True,
+                    )
+                    if state.response:
+                        st.error(state.response)
 
             # Store in history
             history_item = {
