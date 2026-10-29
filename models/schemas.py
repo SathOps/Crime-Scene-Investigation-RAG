@@ -166,6 +166,7 @@ class WorkflowState:
     validation_error: str = ""
     sources: List[Dict[str, Any]] = field(default_factory=list)
     executed_tools: List[ToolExecution] = field(default_factory=list)
+    metrics: Dict[str, float] = field(default_factory=dict)
     status: str = "Idle"
 
     def to_dict(self) -> Dict[str, Any]:
@@ -187,6 +188,7 @@ class WorkflowState:
             "validation_error": self.validation_error,
             "sources": self.sources,
             "executed_tools": [t.to_dict() for t in self.executed_tools],
+            "metrics": self.metrics,
             "status": self.status
         }
 
