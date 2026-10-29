@@ -286,10 +286,10 @@ class LegalResearchAgent:
         try:
             chunks, strength = self.retriever.retrieve_evidence(
                 query=query,
-            top_k=top_k,
-            normalized_query=state.normalized_query,
-            entities=norm_obj.entities_preserved,
-                intent=state.intent.value
+                top_k=top_k,
+                normalized_query=state.normalized_query,
+                entities=norm_obj.entities_preserved,
+                intent=state.intent.value,
             )
         except Exception as exc:
             logger.exception("Evidence retrieval failed")
