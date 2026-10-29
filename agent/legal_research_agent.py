@@ -334,6 +334,33 @@ class LegalResearchAgent:
             state.metrics["source_count"] = 0
             return state
 
+        # Avoid expensive agent/provider calls when retrieval has no usable evidence.
+        if not chunks or strength == "Insufficient":
+            report("No sufficient case evidence was retrieved; returning a grounded limitation without calling agents or the LLM.")
+            answer_obj, raw_resp, err_msg = self.llm_service.generate_structured_response(
+                query=query,
+                intent=state.intent,
+                retrieved_chunks=chunks,
+                evidence_strength=strength,
+                normalized_query=state.normalized_query,
+            )
+            state.structured_answer = answer_obj
+            state.raw_model_response = raw_resp
+            state.validation_error = err_msg
+            state.response = answer_obj.answer
+            state.steps.append(WorkflowStep(
+                "Step 5 — Evidence Sufficiency Gate",
+                "completed",
+                "Insufficient retrieval evidence; specialist and tool-calling stages were safely skipped.",
+            ))
+            state.metrics["specialist_agents_selected"] = 0
+            state.metrics["specialist_agents_completed"] = 0
+            state.metrics["source_count"] = 0
+            state.metrics["retrieved_chunk_count"] = len(chunks)
+            state.metrics["total_duration_seconds"] = round(time.perf_counter() - workflow_started, 3)
+            state.status = "Completed"
+            return state
+
         # 5. MULTI-AGENT SPECIALIST ANALYSIS
         specialist_step = WorkflowStep(
             "Step 5 — Multi-Agent Specialist Analysis",
