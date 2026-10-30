@@ -125,7 +125,7 @@ class IntentClassifier:
         # overlapping keywords such as "evidence", "difference", or "court".
         case_context = any(term in query_text for term in (
             "uploaded case", "case file", "case documents", "this case", "the case",
-            "case judgment", "case record", "crime scene"
+            "case judgment", "case record", "case analysis", "crime scene"
         ))
         comprehensive = any(term in query_text for term in (
             "complete case analysis", "comprehensive case analysis", "full case analysis",
