@@ -1,6 +1,7 @@
 """Regression tests for request-scoped legal tools and case-agnostic retrieval."""
 from agent.tools import build_legal_tools
 from rag.retriever import RAGRetriever
+from models.schemas import DocumentChunk
 
 
 class FakeRetriever:
@@ -8,7 +9,13 @@ class FakeRetriever:
         self.label = label
 
     def retrieve_evidence(self, **kwargs):
-        return [], "Insufficient"
+        return [DocumentChunk(
+            chunk_id=self.label,
+            document_name=f"{self.label}.txt",
+            document_type="Case Record",
+            page_number=1,
+            text=f"evidence from {self.label}",
+        )], "Medium"
 
     def format_chunks_for_context(self, chunks):
         return f"evidence from {self.label}"
@@ -21,10 +28,10 @@ def test_tools_are_bound_to_their_own_retriever_instance():
     result_a = first["retrieve_case_evidence"].invoke({"query": "find evidence"})
     result_b = second["retrieve_case_evidence"].invoke({"query": "find evidence"})
 
-    assert "case A" not in result_a
-    assert "case B" not in result_b
-    assert "current case-file index" in result_a
-    assert "current case-file index" in result_b
+    assert "evidence from case A" in result_a
+    assert "evidence from case B" in result_b
+    assert "case B" not in result_a
+    assert "case A" not in result_b
 
 
 def test_analysis_tools_require_explicit_request_evidence():
