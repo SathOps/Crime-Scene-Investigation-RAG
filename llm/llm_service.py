@@ -83,7 +83,7 @@ class LLMService:
                 document_name=c.document_name,
                 page_number=str(c.page_number),
                 chunk_id=c.chunk_id,
-                excerpt=c.text[:250].replace('\n', ' ')
+                excerpt=c.text[:600].replace('\n', ' ')
             )
             for c in retrieved_chunks
         ]
@@ -300,7 +300,25 @@ class LLMService:
                 q_lower = query.lower()
                 court_chunks = [c for c in chunks if "judgment" in (c.document_name + " " + c.document_type).lower() or "court order" in (c.document_name + " " + c.document_type).lower()]
                 court_text = " ".join(c.text for c in court_chunks)
-                has_verdict = bool(re.search(r"\b(acquitted|convicted|found guilty|not guilty|sentenced to|operative order|the accused is hereby|appeal is allowed|appeal is dismissed)\b", court_text, re.I))
+                has_verdict = bool(re.search(
+                    r"\b(acquitted|convicted|found guilty|not guilty|sentenced to|operative order|"
+                    r"the accused is hereby|appeal is allowed|appeal is dismissed)\b",
+                    court_text, re.I
+                ))
+                if has_verdict:
+                    # A model-generated limitation must never contradict an explicit
+                    # operative order retrieved from the court judgment itself.
+                    stale_limitations = re.compile(
+                        r"(?:does not establish|does not contain|no explicit|remains unverified|"
+                        r"cannot conclude).{0,100}(?:verdict|operative order|court finding|outcome|sentence)|"
+                        r"(?:verdict|operative order|court finding|outcome|sentence).{0,100}"
+                        r"(?:not established|not present|unverified|unknown)",
+                        re.I,
+                    )
+                    structured_obj.limitations = [
+                        item for item in structured_obj.limitations
+                        if not stale_limitations.search(item)
+                    ]
                 unsupported_outcome = bool(re.search(r"\b(judgment confirms|the court (?:confirms|found|finds|held|ruled)|Ramesh Kumar(?:'s)? innocence|was acquitted|was convicted|supports his alibi)\b", structured_obj.answer, re.I))
                 if unsupported_outcome and not has_verdict:
                     structured_obj.answer = "The retrieved court-judgment passage does not expose an operative verdict or judicial reasoning. I cannot conclude that Ramesh Kumar was acquitted, convicted, or that the court resolved the witness contradictions. The outcome remains unverified.\n\n" + self._expand_short_answer("", query, chunks)
@@ -334,7 +352,7 @@ class LLMService:
                 ):
                     structured_obj.evidence_summary = [
                         f"[{c.document_name}, p. {c.page_number}; chunk {c.chunk_id}] "
-                        + re.sub(r"\s+", " ", c.text).strip()[:500]
+                        + re.sub(r"\s+", " ", c.text).strip()[:900]
                         for c in chunks
                     ]
                 if len(structured_obj.key_findings) < 3 or any(
@@ -395,9 +413,8 @@ class LLMService:
             for c in chunks:
                 excerpt = re.sub(r"\s+", " ", c.text).strip()
                 if excerpt:
-                    suffix = "…" if len(excerpt) > 420 else ""
-                    sections.append("- **[" + c.document_name + ", p. " + str(c.page_number) + "; " + c.document_type + "]** " + excerpt[:420] + suffix)
-        sections.extend(["", "## Evidence limits", "Do not treat a charge sheet or prosecution summary as a court finding. Do not infer forensic conclusions from a list of items submitted for testing. Conclusions not shown in retrieved source text remain unverified."])
+                    sections.append("- **[" + c.document_name + ", p. " + str(c.page_number) + "; " + c.document_type + "]** " + excerpt[:900] + ("…" if len(excerpt) > 900 else ""))
+        sections.extend(["", "## Evidence limits", "Distinguish allegations in investigative or prosecution documents from findings expressly made in a court judgment. Forensic conclusions are attributed to the document that reports them; underlying laboratory reports should be checked where independent verification is required. Conclusions not shown in the retrieved source text remain unverified."])
         return "\n".join(sections)
 
     def _synthesize_answer_from_chunks(self, chunks: List[DocumentChunk]) -> str:
