@@ -388,11 +388,11 @@ class LLMService:
             return answer
 
         conviction = bool(re.search(
-            r"\\b(convicted|found guilty|held guilty|prosecution proved.{0,80}beyond reasonable doubt)\\b",
+            r"(convicted|found guilty|held guilty|prosecution proved.{0,80}beyond reasonable doubt)",
             court_text, re.I
         ))
         acquittal = bool(re.search(
-            r"\\b(acquitted|found not guilty|not guilty|given benefit of doubt)\\b",
+            r"(acquitted|found not guilty|not guilty|given benefit of doubt)",
             court_text, re.I
         ))
         if conviction == acquittal:
