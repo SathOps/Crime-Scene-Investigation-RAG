@@ -13,7 +13,7 @@ Streamlit UI
     ↓
 LegalResearchAgent (Workflow Coordinator)
 ├── Query Normalization & Intent Classification
-├── RAGRetriever → ChromaDB Vector Store
+├── RAGRetriever → ChromaDB / FAISS Vector Store
 ├── MultiAgentCoordinator
 │   ├── Timeline Analysis Agent
 │   ├── Witness & Contradiction Agent
@@ -51,6 +51,33 @@ WorkflowState → Streamlit Result UI + Session History
   - Verifiable Citation Sources (Document name, snippet, page number, relevance score)
 - **Persistent Session State History**: Full active-session conversation history tracking with interactive expanders and raw JSON inspection.
 - **History Control**: One-click clear session history functionality without wiping vector store indexes.
+
+
+### Experiment 7A — Legal Case RAG
+- **Document ingestion**: Retains PDF, DOCX, and TXT ingestion with document/page metadata.
+- **Legal-aware chunking**: Preserves legal headings and paragraph boundaries while applying configurable chunk size and overlap.
+- **Embeddings**: Uses the local Sentence-Transformers `all-MiniLM-L6-v2` model by default, with existing provider options retained.
+- **Vector database**: ChromaDB remains the default and preserves the existing `data/vectorstore` index. An optional persistent FAISS CPU backend is available through `VECTOR_STORE_BACKEND=faiss`.
+- **Transparent retrieval**: The Research diagnostics panel shows the actual retrieved excerpts, source file, page, chunk ID, and relevance score.
+- **Evidence-bounded generation**: The legal answer prompt requires claims to be supported by retrieved case passages. If the evidence gate finds no sufficient support, the workflow returns an explicit insufficient-information answer instead of asking the model to fill the gap.
+
+### Experiment 7B — Retrieval Evaluation & Benchmarking
+- The **RAG EVALUATION** tab accepts manually verified relevant filenames and/or chunk IDs.
+- Reports Precision@K, Recall@K, F1@K, hit rate, reciprocal rank, mean retrieval score, and retrieval time.
+- Displays the passages used for the retrieval evaluation so that relevance can be inspected.
+- Compares a direct LLM-only answer with the complete RAG workflow and reports retrieval-only and total RAG latency.
+- Single-run latency is diagnostic; repeat runs under comparable conditions before making performance claims.
+
+**Vector-store configuration**
+```env
+# Existing persistent ChromaDB index (default)
+VECTOR_STORE_BACKEND=chroma
+
+# Optional FAISS CPU index
+VECTOR_STORE_BACKEND=faiss
+```
+
+Install dependencies with `python -m pip install -r requirements.txt`. When switching backends, re-index the case documents into the selected backend; ChromaDB and FAISS maintain separate indexes. Keep the embedding model and its vector dimensions consistent for a given index.
 
 ### Premium Dark-Themed User Experience
 - High-contrast, glassmorphism-inspired dark UI with custom typography (`Inter` & `JetBrains Mono`).
