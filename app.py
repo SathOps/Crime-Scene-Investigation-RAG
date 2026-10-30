@@ -1656,7 +1656,7 @@ with tab_research:
         # ─── SOURCES ─────────────────────────
         with st.expander(f"EVIDENCE SOURCES  [{len(state.sources)} cited; {len(state.retrieved_chunks)} candidates retrieved]"):
             if not state.sources:
-                st.html("""
+                st.html(f"""
                 <div class="empty-state">
                     <div class="empty-title">No Citable Sources Accepted</div>
                     <div class="empty-desc">{len(state.retrieved_chunks)} candidate passage(s) were retrieved, but none passed the evidence sufficiency gate for citation.</div>
