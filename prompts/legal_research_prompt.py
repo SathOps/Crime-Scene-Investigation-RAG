@@ -71,7 +71,7 @@ LEGAL_RESEARCH_PROMPT_TEMPLATE = ChatPromptTemplate.from_messages([
     ("human", """User Original Query: {question}
 Normalized Research Query: {normalized_query}
 Identified Intent: {intent}
-Evidence Strength: {evidence_strength}
+Retrieval Match Rating: {evidence_strength} (retrieval relevance only; not the legal strength of the evidence or proof of guilt)
 
 Retrieved Case Evidence:
 {context}
