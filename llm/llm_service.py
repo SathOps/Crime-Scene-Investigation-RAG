@@ -360,6 +360,9 @@ class LLMService:
                     for item in structured_obj.key_findings
                 ):
                     structured_obj.key_findings = self._extract_key_findings_from_chunks(chunks)
+                structured_obj = self._enforce_explicit_court_outcome(
+                    structured_obj, query, chunks
+                )
                 return structured_obj, raw_content, ""
             except ValidationError:
                 pass
@@ -367,6 +370,66 @@ class LLMService:
         # If all JSON parsing failed, construct rich fallback answer
         fallback_obj = self._build_fallback_answer(query, intent, chunks, "", normalized_query)
         return fallback_obj, raw_content, ""
+
+    @staticmethod
+    def _enforce_explicit_court_outcome(
+        answer: LegalResearchAnswer,
+        query: str,
+        chunks: List[DocumentChunk],
+    ) -> LegalResearchAnswer:
+        """Make explicit operative court outcomes authoritative over model polarity errors."""
+        court_chunks = [
+            chunk for chunk in chunks
+            if any(term in (chunk.document_name + " " + chunk.document_type).lower()
+                   for term in ("judgment", "court order", "court finding", "final order"))
+        ]
+        court_text = " ".join(chunk.text for chunk in court_chunks)
+        if not court_text:
+            return answer
+
+        conviction = bool(re.search(
+            r"\\b(convicted|found guilty|held guilty|prosecution proved.{0,80}beyond reasonable doubt)\\b",
+            court_text, re.I
+        ))
+        acquittal = bool(re.search(
+            r"\\b(acquitted|found not guilty|not guilty|given benefit of doubt)\\b",
+            court_text, re.I
+        ))
+        if conviction == acquittal:
+            return answer
+
+        q = (query or "").lower()
+        asks_party_support = any(term in q for term in (
+            "support the prosecution", "supports the prosecution", "prosecution's allegations",
+            "prosecution allegations", "support the allegations", "case against the accused"
+        ))
+        if asks_party_support:
+            outcome = "supports" if conviction else "does not support"
+            result = (
+                "Yes" if conviction else "No"
+            ) + f". According to the retrieved court judgment, the final outcome {outcome} the prosecution's case. "
+            if conviction:
+                result += (
+                    "The judgment records that the prosecution proved its case beyond reasonable doubt "
+                    "and that the accused was convicted. The court's operative order, rather than the "
+                    "underlying allegations alone, is the basis for this conclusion."
+                )
+            else:
+                result += (
+                    "The judgment records an acquittal or finding of not guilty. The prosecution's "
+                    "allegations must therefore not be described as accepted findings of the court."
+                )
+            answer.answer = result
+            answer.key_findings = [
+                "The operative court judgment records " + ("a conviction." if conviction else "an acquittal."),
+                "The conclusion is based on the court's recorded outcome, not merely the prosecution's allegations.",
+            ]
+            answer.evidence_summary = [
+                f"[{chunk.document_name}, p. {chunk.page_number}] "
+                + re.sub(r"\\s+", " ", chunk.text).strip()[:900]
+                for chunk in court_chunks
+            ]
+        return answer
 
     def _regex_extract_fields(self, raw_text: str, query: str, intent: str) -> Dict[str, Any]:
         """Regex helper to rescue fields if JSON is partially malformed."""
