@@ -1,5 +1,9 @@
 name: Multi-agent checks
 
+concurrency:
+  group: multi-agent-checks-${{ github.ref }}
+  cancel-in-progress: true
+
 on:
   push:
     branches:
