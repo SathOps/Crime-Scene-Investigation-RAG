@@ -123,3 +123,31 @@ def benchmark_retrieval(
         "aggregate": aggregate,
         "results": per_query,
     }
+
+
+
+# Starter labels for the bundled synthetic case dataset. These are examples for
+# smoke evaluation; replace or extend them with manually verified labels for a
+# real case collection. The final query intentionally has no relevant document.
+DEFAULT_LEGAL_EVALUATION_CASES = [
+    {
+        "query": "What did the security guard report about the incident timeline?",
+        "relevant_documents": ["02_Witness_Statements.txt"],
+    },
+    {
+        "query": "What timestamps and observations are recorded in the CCTV analysis?",
+        "relevant_documents": ["03_CCTV_Analysis_Report.txt"],
+    },
+    {
+        "query": "What findings and conclusions are recorded in the forensic laboratory report?",
+        "relevant_documents": ["04_Forensic_Lab_Report.txt"],
+    },
+    {
+        "query": "What verdict and sentence are stated in the court judgment?",
+        "relevant_documents": ["08_Court_Judgment.txt"],
+    },
+    {
+        "query": "What is the hostel fee?",
+        "relevant_documents": [],
+    },
+]
