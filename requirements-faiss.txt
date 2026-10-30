@@ -1,0 +1,2 @@
+# Optional CPU-only FAISS backend dependency
+faiss-cpu==1.12.0
