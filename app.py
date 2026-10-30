@@ -1654,12 +1654,12 @@ with tab_research:
             """)
 
         # ─── SOURCES ─────────────────────────
-        with st.expander(f"EVIDENCE SOURCES  [{len(state.sources)} retrieved]"):
+        with st.expander(f"EVIDENCE SOURCES  [{len(state.sources)} cited; {len(state.retrieved_chunks)} candidates retrieved]"):
             if not state.sources:
                 st.html("""
                 <div class="empty-state">
-                    <div class="empty-title">No Sources Retrieved</div>
-                    <div class="empty-desc">The query did not match any documents in the knowledge base.</div>
+                    <div class="empty-title">No Citable Sources Accepted</div>
+                    <div class="empty-desc">{len(state.retrieved_chunks)} candidate passage(s) were retrieved, but none passed the evidence sufficiency gate for citation.</div>
                 </div>
                 """)
             else:
