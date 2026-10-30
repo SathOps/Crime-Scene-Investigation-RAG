@@ -73,3 +73,19 @@ def test_forensic_and_judgment_expansion_is_generic():
     assert "court judgment final order" in joined
     assert "04_forensic_lab_report" not in joined
     assert "08_court_judgment" not in joined
+
+
+def test_unsupported_tool_calling_provider_is_reported_as_skipped():
+    from agent.legal_research_agent import LegalResearchAgent
+    from models.schemas import WorkflowState
+
+    class GeminiService:
+        provider = "gemini"
+
+    agent = LegalResearchAgent(FakeRetriever("case"), GeminiService())
+    state = WorkflowState(query="Summarize the case")
+    result = agent.execute_tool_calling_loop("Summarize the case", state, "source excerpt")
+
+    assert result == ""
+    assert state.metrics["tool_loop_status"] == "skipped"
+    assert "no LangChain tool-calling adapter" in state.metrics["tool_loop_reason"]
