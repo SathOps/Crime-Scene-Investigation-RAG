@@ -1927,9 +1927,11 @@ with tab_evaluation:
         else:
             try:
                 with st.spinner("Retrieving and scoring evidence..."):
+                    retrieval_started = time.perf_counter()
                     eval_chunks, eval_strength = retriever.retrieve_evidence(
                         evaluation_query.strip(), top_k=top_k
                     )
+                    retrieval_elapsed = time.perf_counter() - retrieval_started
                     eval_metrics = evaluate_retrieval(
                         eval_chunks,
                         relevant_document_names=[
@@ -1939,6 +1941,7 @@ with tab_evaluation:
                             item.strip() for item in relevant_chunks_input.split(",") if item.strip()
                         ],
                         k=top_k,
+                        retrieval_time_seconds=retrieval_elapsed,
                     )
                 st.markdown("**Retrieval results**")
                 st.caption(f"Evidence match rating: {eval_strength} · Retrieved {len(eval_chunks)} chunk(s)")
