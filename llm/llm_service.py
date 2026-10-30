@@ -310,8 +310,8 @@ class LLMService:
                     # operative order retrieved from the court judgment itself.
                     stale_limitations = re.compile(
                         r"(?:does not establish|does not contain|no explicit|remains unverified|"
-                        r"cannot conclude).{0,100}(?:verdict|operative order|court finding|outcome|sentence)|"
-                        r"(?:verdict|operative order|court finding|outcome|sentence).{0,100}"
+                        r"cannot conclude).{0,100}(?:verdict|operative order|court finding|final finding|outcome|sentence)|"
+                        r"(?:verdict|operative order|court finding|final finding|outcome|sentence).{0,100}"
                         r"(?:not established|not present|unverified|unknown)",
                         re.I,
                     )
