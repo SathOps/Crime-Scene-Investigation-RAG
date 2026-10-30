@@ -1737,6 +1737,8 @@ with tab_research:
                         <div class="source-excerpt" style="margin-top:6px;">"{html.escape(c_item.text[:220].strip())}..."</div>
                     </div>
                     """)
+                    with st.expander(f"Full retrieved passage — {c_item.document_name}, page {c_item.page_number}"):
+                        st.text(c_item.text)
 
         # ─── WORKFLOW LOG ─────────────────────
         with st.expander("AGENT WORKFLOW LOG"):
