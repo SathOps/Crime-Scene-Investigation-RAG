@@ -107,13 +107,14 @@ class LegalResearchAgent:
             state.metrics["tool_loop_reason"] = "Deterministic local provider does not support tool calling."
             return ""
 
-        chat_model = self.llm_service.get_chat_model()
-        
         try:
+            chat_model = self.llm_service.get_chat_model()
             llm_with_tools = chat_model.bind_tools(self.tools)
         except Exception as e:
-            logger.warning(f"Model bind_tools failed ({e}), falling back to direct tool invocation.")
-            llm_with_tools = chat_model
+            logger.exception("Tool-capable chat model initialization failed")
+            state.metrics["tool_loop_status"] = "failed"
+            state.metrics["tool_loop_reason"] = f"{type(e).__name__}: {e}"
+            return ""
 
         system_msg = SystemMessage(content=(
             "You are an expert Legal Research Agent. Analyze legal case questions, determine if specialized tools "
@@ -133,7 +134,9 @@ class LegalResearchAgent:
             try:
                 response = llm_with_tools.invoke(messages)
             except Exception as e:
-                logger.error(f"[AGENT LLM ERROR] {e}")
+                logger.exception("[AGENT LLM ERROR]")
+                state.metrics["tool_loop_status"] = "failed"
+                state.metrics["tool_loop_reason"] = f"{type(e).__name__}: {e}"
                 break
 
             messages.append(response)
@@ -205,9 +208,10 @@ class LegalResearchAgent:
                 final_response_str = str(m.content)
                 break
 
-        state.metrics["tool_loop_status"] = "completed" if state.executed_tools else "no_tool_calls"
-        if iteration >= MAX_TOOL_ITERATIONS:
-            state.metrics["tool_loop_status"] = "iteration_limit"
+        if state.metrics.get("tool_loop_status") != "failed":
+            state.metrics["tool_loop_status"] = "completed" if state.executed_tools else "no_tool_calls"
+            if iteration >= MAX_TOOL_ITERATIONS:
+                state.metrics["tool_loop_status"] = "iteration_limit"
         return final_response_str
 
     def run_workflow(
@@ -395,18 +399,19 @@ class LegalResearchAgent:
                 step_status = "failed"
                 detail = result.error[:500]
             else:
-                step_status = "completed"
+                step_status = "skipped"
                 detail = f"Skipped: {result.error or 'No specialist analysis performed.'}"
             state.steps.append(WorkflowStep(
                 f"Agent — {result.agent_name}",
                 step_status,
                 detail,
             ))
-        specialist_step.status = (
-            "completed"
-            if successful_specialists or not any(result.status == "failed" for result in specialist_results)
-            else "failed"
-        )
+        if any(result.status == "failed" for result in specialist_results) and not successful_specialists:
+            specialist_step.status = "failed"
+        elif successful_specialists:
+            specialist_step.status = "completed"
+        else:
+            specialist_step.status = "skipped"
         specialist_step.detail = (
             f"Completed {successful_specialists} of {len(specialist_results)} specialist analyses. "
             "Specialist notes are secondary analysis; final synthesis still uses retrieved source passages."
