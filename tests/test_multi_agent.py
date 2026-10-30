@@ -258,7 +258,7 @@ def test_forensic_and_judgment_short_answer_states_missing_results_explicitly():
         "Summarize forensic findings and the final court judgment.",
         chunks,
     )
-    assert "does not establish the operative verdict" in expanded
+    assert "do not establish an operative verdict or sentence" in expanded
     assert "do not expose forensic laboratory results or conclusions" in expanded
     assert "prosecution summary is an allegation" in expanded
     assert len(expanded) < 3000
