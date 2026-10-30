@@ -46,7 +46,7 @@ importlib.reload(rag.embeddings)
 from rag.embeddings import EmbeddingService
 from rag.vector_store import VectorStoreManager
 from rag.retriever import RAGRetriever
-from rag.evaluation import evaluate_retrieval
+from rag.evaluation import evaluate_retrieval, benchmark_retrieval, DEFAULT_LEGAL_EVALUATION_CASES
 from rag.benchmark import compare_llm_only_vs_rag
 from llm.llm_service import LLMService
 import agent.legal_research_agent
@@ -1913,11 +1913,38 @@ with tab_evaluation:
         key="rag_eval_relevant_chunks",
     )
 
-    eval_col1, eval_col2 = st.columns(2)
+    eval_col1, eval_col2, eval_col3 = st.columns(3)
     with eval_col1:
         run_retrieval_eval = st.button("Evaluate Retrieval", type="primary", use_container_width=True)
     with eval_col2:
         run_latency_benchmark = st.button("Compare LLM-only vs RAG", use_container_width=True)
+    with eval_col3:
+        run_sample_benchmark = st.button("Run Sample Benchmark", use_container_width=True)
+
+    if run_sample_benchmark:
+        try:
+            with st.spinner("Running labelled synthetic-case benchmark..."):
+                sample_report = benchmark_retrieval(
+                    retriever, DEFAULT_LEGAL_EVALUATION_CASES, top_k=top_k
+                )
+            st.markdown("**Sample benchmark aggregate**")
+            aggregate = sample_report["aggregate"]
+            sample_cols = st.columns(4)
+            sample_cols[0].metric("Mean Precision@K", f"{aggregate['precision_at_k']:.3f}")
+            sample_cols[1].metric("Mean Recall@K", f"{aggregate['recall_at_k']:.3f}")
+            sample_cols[2].metric("Mean F1@K", f"{aggregate['f1_at_k']:.3f}")
+            sample_cols[3].metric("Mean MRR", f"{aggregate['reciprocal_rank']:.3f}")
+            st.caption(
+                f"{sample_report['query_count']} labelled queries · "
+                f"mean retrieval time {aggregate['retrieval_time_seconds']:.4f} s"
+            )
+            st.dataframe(sample_report["results"], use_container_width=True)
+            st.info(
+                "The sample labels target the bundled synthetic case files. "
+                "The out-of-scope hostel-fee question intentionally has no relevant source."
+            )
+        except Exception as exc:
+            st.error(f"Sample benchmark failed: {type(exc).__name__}: {exc}")
 
     if run_retrieval_eval:
         if not evaluation_query.strip():
