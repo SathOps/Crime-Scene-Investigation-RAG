@@ -18,7 +18,7 @@ def _value(item: Any, key: str, default: Any = None) -> Any:
 
 
 def _normalize_name(value: Any) -> str:
-    return re.sub(r"\\s+", " ", str(value or "").strip().casefold())
+    return re.sub(r"\s+", " ", str(value or "").strip().casefold())
 
 
 def evaluate_retrieval(
