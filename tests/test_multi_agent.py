@@ -367,3 +367,82 @@ def test_source_passage_expansion_preserves_more_than_420_characters():
     expanded = service._expand_short_answer("Short summary.", "Summarize this case.", [chunk])
     assert len(expanded) > 600
     assert "Supported source wording." in expanded
+
+
+def test_general_difference_question_is_not_misclassified_as_case_contradiction():
+    from utils.intent_classifier import IntentClassifier
+
+    intent, confidence = IntentClassifier.classify(
+        "What is the difference between murder and culpable homicide?"
+    )
+    assert intent == IntentType.GENERAL_RESEARCH
+    assert confidence >= 0.9
+
+
+def test_comprehensive_case_analysis_routes_to_case_summary():
+    from utils.intent_classifier import IntentClassifier
+
+    intent, confidence = IntentClassifier.classify(
+        "Provide a complete case analysis covering facts, evidence, legal issues, and judgment in the uploaded case."
+    )
+    assert intent == IntentType.CASE_SUMMARY
+    assert confidence >= 0.9
+
+
+def test_court_outcome_guard_corrects_prosecution_support_polarity():
+    from llm.llm_service import LLMService
+    from models.schemas import DocumentChunk, LegalResearchAnswer
+
+    judgment = DocumentChunk(
+        chunk_id="operative_order",
+        document_name="08_Court_Judgment.txt",
+        document_type="Court Judgment / Order",
+        page_number=1,
+        text=(
+            "The prosecution established the case beyond reasonable doubt. "
+            "The accused is CONVICTED under IPC Sections 302 and 392. "
+            "The court rejects the defence alibi."
+        ),
+    )
+    answer = LegalResearchAnswer(
+        query="Does the final judgment support the prosecution's allegations?",
+        intent="COURT_FINDINGS",
+        answer="The final judgment does not support the prosecution's allegations.",
+    )
+    fixed = LLMService._enforce_explicit_court_outcome(
+        answer, answer.query, [judgment]
+    )
+    assert fixed.answer.startswith("Yes.")
+    assert "convicted" in fixed.answer.lower()
+    assert "does not support" not in fixed.answer.lower()
+
+
+def test_court_outcome_guard_preserves_acquittal():
+    from llm.llm_service import LLMService
+    from models.schemas import DocumentChunk, LegalResearchAnswer
+
+    judgment = DocumentChunk(
+        chunk_id="operative_order",
+        document_name="08_Court_Judgment.txt",
+        document_type="Court Judgment / Order",
+        page_number=1,
+        text="The accused is acquitted. The prosecution failed to prove the charge.",
+    )
+    answer = LegalResearchAnswer(
+        query="Does the final judgment support the prosecution's allegations?",
+        intent="COURT_FINDINGS",
+        answer="The court convicted the accused.",
+    )
+    fixed = LLMService._enforce_explicit_court_outcome(
+        answer, answer.query, [judgment]
+    )
+    assert fixed.answer.startswith("No.")
+    assert "acquittal" in fixed.answer.lower()
+
+
+def test_specialist_prompt_preserves_witness_and_party_attribution():
+    from agent.specialist_agents import CaseFactsAgent
+
+    prompt = CaseFactsAgent(FakeLLMService()).system_instruction.lower()
+    assert "a witness observation is not a defence argument" in prompt
+    assert "never transfer a statement" in prompt
