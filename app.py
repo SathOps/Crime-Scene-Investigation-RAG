@@ -1,6 +1,28 @@
+import sys
+import os
+
+# Suppress tqdm / transformers progress bars that cause Errno 5 on detached stderr
+os.environ["HF_HUB_DISABLE_PROGRESS_BARS"] = "1"
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
+
+for _stream in (sys.stdout, sys.stderr):
+    _orig = getattr(_stream, "flush", None)
+    if _orig:
+        def _safe_flush(_f=_orig):
+            try:
+                _f()
+            except OSError:
+                pass
+        _stream.flush = _safe_flush
+
+try:
+    import transformers
+    transformers.utils.logging.disable_progress_bar()
+except Exception:
+    pass
+
 import html
 import re
-import os
 from pathlib import Path
 import streamlit as st
 import json
@@ -13,13 +35,20 @@ from config import (
     DEFAULT_LLM_PROVIDER, DEFAULT_LLM_MODEL, OLLAMA_BASE_URL, OLLAMA_MODEL,
     GEMINI_API_KEY, OPENAI_API_KEY
 )
+import importlib
+import models.schemas
+importlib.reload(models.schemas)
 from models.schemas import WorkflowState, LegalResearchAnswer
 from rag.document_loader import DocumentLoader
 from rag.text_splitter import LegalTextSplitter
+import rag.embeddings
+importlib.reload(rag.embeddings)
 from rag.embeddings import EmbeddingService
 from rag.vector_store import VectorStoreManager
 from rag.retriever import RAGRetriever
 from llm.llm_service import LLMService
+import agent.legal_research_agent
+importlib.reload(agent.legal_research_agent)
 from agent.legal_research_agent import LegalResearchAgent, is_standalone_hypothetical_query
 from utils.helpers import state_to_json, format_file_size
 
@@ -1165,17 +1194,20 @@ with st.sidebar:
 
     with col_sample:
         if st.button("Samples", use_container_width=True):
-            with st.spinner("Loading..."):
-                sample_files = list(SAMPLE_DATA_DIR.glob("*.txt"))
-                splitter = LegalTextSplitter(chunk_size=DEFAULT_CHUNK_SIZE, chunk_overlap=DEFAULT_CHUNK_OVERLAP)
-                total_chunks = 0
-                for sf in sample_files:
-                    pages_data = DocumentLoader.load_file(sf, sf.name)
-                    chunks = splitter.split_pages(pages_data)
-                    st.session_state.vector_store.add_chunks(chunks, embedding_service)
-                    total_chunks += len(chunks)
-                st.success(f"Loaded {len(sample_files)} samples, {total_chunks} chunks")
-                st.rerun()
+            with st.spinner("Loading sample case files..."):
+                try:
+                    sample_files = sorted(list(SAMPLE_DATA_DIR.glob("*.txt")))
+                    splitter = LegalTextSplitter(chunk_size=DEFAULT_CHUNK_SIZE, chunk_overlap=DEFAULT_CHUNK_OVERLAP)
+                    total_chunks = 0
+                    for sf in sample_files:
+                        pages_data = DocumentLoader.load_file(sf, sf.name)
+                        chunks = splitter.split_pages(pages_data)
+                        st.session_state.vector_store.add_chunks(chunks, embedding_service)
+                        total_chunks += len(chunks)
+                    st.success(f"Loaded {len(sample_files)} samples, {total_chunks} chunks")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Failed to load sample files: {str(e)}")
 
     if st.button("Clear Knowledge Base", use_container_width=True):
         st.session_state.vector_store.clear_store()
@@ -1420,12 +1452,22 @@ with tab_research:
                 def show_workflow_progress(message: str) -> None:
                     progress_line.write(f"● {message}")
 
+                state = None
                 try:
-                    state: WorkflowState = agent.run_workflow(
-                        query=user_query,
-                        top_k=top_k_val,
-                        progress_callback=show_workflow_progress,
-                    )
+                    try:
+                        state = agent.run_workflow(
+                            query=user_query,
+                            top_k=top_k_val,
+                            progress_callback=show_workflow_progress,
+                        )
+                    except TypeError as type_err:
+                        if "progress_callback" in str(type_err):
+                            state = agent.run_workflow(
+                                query=user_query,
+                                top_k=top_k_val,
+                            )
+                        else:
+                            raise
                 except Exception as exc:
                     status_container.update(
                         label="Research workflow failed",
@@ -1434,29 +1476,30 @@ with tab_research:
                     )
                     st.error(f"Research failed safely: {type(exc).__name__}: {exc}")
 
-                if state.status == "Completed":
-                    status_container.update(
-                        label="✓ Analysis Complete",
-                        state="complete",
-                        expanded=False,
-                    )
-                else:
-                    status_container.update(
-                        label="Research stopped safely — see the error details below",
-                        state="error",
-                        expanded=True,
-                    )
-                    if state.response:
-                        st.error(state.response)
+                if state is not None:
+                    if state.status == "Completed":
+                        status_container.update(
+                            label="✓ Analysis Complete",
+                            state="complete",
+                            expanded=False,
+                        )
+                    else:
+                        status_container.update(
+                            label="Research stopped safely — see the error details below",
+                            state="error",
+                            expanded=True,
+                        )
+                        if state.response:
+                            st.error(state.response)
 
-            # Store in history
-            history_item = {
-                "query": user_query,
-                "timestamp": datetime.now().strftime("%H:%M:%S"),
-                "state": state,
-                "answer_data": state.structured_answer.model_dump() if state.structured_answer else {}
-            }
-            st.session_state.history.insert(0, history_item)
+                    # Store in history
+                    history_item = {
+                        "query": user_query,
+                        "timestamp": datetime.now().strftime("%H:%M:%S"),
+                        "state": state,
+                        "answer_data": state.structured_answer.model_dump() if state.structured_answer else {}
+                    }
+                    st.session_state.history.insert(0, history_item)
 
     # ─── RENDER RESULTS ──────────────────────
     if st.session_state.history:

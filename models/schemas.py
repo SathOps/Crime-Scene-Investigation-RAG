@@ -169,6 +169,12 @@ class WorkflowState:
     metrics: Dict[str, float] = field(default_factory=dict)
     status: str = "Idle"
 
+    def __getattr__(self, name: str) -> Any:
+        if name == "metrics":
+            self.metrics = {}
+            return self.metrics
+        raise AttributeError(f"'{type(self).__name__}' object has no attribute '{name}'")
+
     def to_dict(self) -> Dict[str, Any]:
         return {
             "query": self.query,
