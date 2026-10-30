@@ -1669,7 +1669,8 @@ with tab_research:
 
             with col_diag2:
                 st.markdown('<div class="section-label-blue">Pipeline Execution Status</div>', unsafe_allow_html=True)
-                st.markdown(f"**Evidence Strength:** `{strength}`")
+                st.markdown(f"**Retrieval Match:** `{strength}`")
+                st.caption("This rating reflects how closely retrieved passages match the query; it is not a measure of legal proof strength or the court's confidence.")
                 st.markdown(f"**Chunks Retrieved:** `{len(state.retrieved_chunks)} passages`")
                 st.markdown(f"**Tools Invoked:** `{len(state.executed_tools)} tools`")
                 
