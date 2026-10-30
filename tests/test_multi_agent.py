@@ -298,3 +298,72 @@ def test_insufficient_retrieval_skips_specialists_and_tool_loop():
     assert state.metrics["specialist_agents_selected"] == 0
     assert state.metrics["retrieved_chunk_count"] == 0
     assert any(step.step_name == "Step 5 — Evidence Sufficiency Gate" for step in state.steps)
+
+
+def test_explicit_court_order_removes_contradictory_model_limitations():
+    import json
+    from llm.llm_service import LLMService
+    from models.schemas import DocumentChunk, SourceModel
+
+    service = LLMService(provider="local")
+    judgment = DocumentChunk(
+        chunk_id="judgment_order",
+        document_name="08_Court_Judgment.txt",
+        document_type="Court Judgment / Order",
+        page_number=1,
+        text=(
+            "JUDGMENT & FINAL ORDER. The court holds that the prosecution proved "
+            "the case beyond reasonable doubt. The accused is CONVICTED under "
+            "IPC Sections 302 and 392. Sentenced to imprisonment for life and "
+            "rigorous imprisonment for 7 years. Both sentences run concurrently."
+        ),
+    )
+    payload = {
+        "query": "What happened in this case?",
+        "normalized_query": "What happened in this case?",
+        "intent": "CASE_SUMMARY",
+        "answer": "The accused was convicted of murder and robbery.",
+        "key_findings": ["The judgment records a conviction."],
+        "evidence_summary": ["The final order records conviction and sentence."],
+        "limitations": [
+            "The retrieved judgment excerpt does not establish the court's final findings, as it only contains prosecution allegations and no reasoning or order text."
+        ],
+    }
+    sources = [SourceModel(
+        document_name=judgment.document_name,
+        page_number="1",
+        chunk_id=judgment.chunk_id,
+        excerpt=judgment.text[:600],
+    )]
+
+    answer, _, error = service._parse_and_validate_json(
+        json.dumps(payload),
+        "What happened in this case?",
+        "CASE_SUMMARY",
+        sources,
+        [judgment],
+        "What happened in this case?",
+    )
+
+    assert not error
+    assert "CONVICTED" in judgment.text
+    assert not any("does not establish" in item.lower() for item in answer.limitations)
+    assert not any("no reasoning or order" in item.lower() for item in answer.limitations)
+
+
+def test_source_passage_expansion_preserves_more_than_420_characters():
+    from llm.llm_service import LLMService
+    from models.schemas import DocumentChunk
+
+    service = LLMService(provider="local")
+    long_text = "Court record detail. " + ("Supported source wording. " * 40)
+    chunk = DocumentChunk(
+        chunk_id="long_source",
+        document_name="08_Court_Judgment.txt",
+        document_type="Court Judgment / Order",
+        page_number=1,
+        text=long_text,
+    )
+    expanded = service._expand_short_answer("Short summary.", "Summarize this case.", [chunk])
+    assert len(expanded) > 600
+    assert "Supported source wording." in expanded
