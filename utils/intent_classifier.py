@@ -120,6 +120,27 @@ class IntentClassifier:
         # Explicit court-outcome or forensic-results requests take precedence over
         # incidental words such as "contradictions" in a compound query.
         query_text = (query + " " + norm_obj.normalized_query).lower()
+
+        # Broad case-analysis and general-law questions must be routed before
+        # overlapping keywords such as "evidence", "difference", or "court".
+        case_context = any(term in query_text for term in (
+            "uploaded case", "case file", "case documents", "this case", "the case",
+            "case judgment", "case record", "crime scene"
+        ))
+        comprehensive = any(term in query_text for term in (
+            "complete case analysis", "comprehensive case analysis", "full case analysis",
+            "covering facts", "facts, evidence", "facts evidence legal issues",
+            "legal issues and judgment", "complete analysis"
+        ))
+        if comprehensive and case_context:
+            return IntentType.CASE_SUMMARY, 0.99
+        if ("difference between" in query_text or "distinguish between" in query_text) and not case_context:
+            return IntentType.GENERAL_RESEARCH, 0.99
+        if any(term in query_text for term in (
+            "summarise facts", "summarize facts", "summarise the facts", "summarize the facts",
+            "facts and issues", "case summary", "summarize the case", "summarise the case"
+        )) and case_context:
+            return IntentType.CASE_SUMMARY, 0.98
         asks_court_outcome = any(term in query_text for term in (
             "court judgment", "court judgement", "final court judgment", "final order",
             "court findings", "judge findings", "verdict", "acquitted", "convicted"
