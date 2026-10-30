@@ -77,7 +77,7 @@ VECTOR_STORE_BACKEND=chroma
 VECTOR_STORE_BACKEND=faiss
 ```
 
-Install dependencies with `python -m pip install -r requirements.txt`. When switching backends, re-index the case documents into the selected backend; ChromaDB and FAISS maintain separate indexes. Keep the embedding model and its vector dimensions consistent for a given index.
+Install the standard dependencies with `python -m pip install -r requirements.txt`. To enable FAISS, install the optional dependency with `python -m pip install -r requirements-faiss.txt` (or install a compatible `faiss-cpu` build for your operating system). FAISS is kept optional so the existing ChromaDB setup remains installable without changing its dependency footprint. When switching backends, re-index the case documents into the selected backend; ChromaDB and FAISS maintain separate indexes. Keep the embedding model and its vector dimensions consistent for a given index.
 
 ### Premium Dark-Themed User Experience
 - High-contrast, glassmorphism-inspired dark UI with custom typography (`Inter` & `JetBrains Mono`).
