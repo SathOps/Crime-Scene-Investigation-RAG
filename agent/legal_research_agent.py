@@ -102,9 +102,11 @@ class LegalResearchAgent:
 
     def execute_tool_calling_loop(self, query: str, state: WorkflowState, evidence_context: str = "") -> str:
         """Execute tools bound to this agent instance and this request's evidence only."""
-        if self.llm_service.provider == "local":
+        if self.llm_service.provider not in {"ollama", "openai"}:
             state.metrics["tool_loop_status"] = "skipped"
-            state.metrics["tool_loop_reason"] = "Deterministic local provider does not support tool calling."
+            state.metrics["tool_loop_reason"] = (
+                f"No LangChain tool-calling adapter is configured for provider '{self.llm_service.provider}'."
+            )
             return ""
 
         try:
