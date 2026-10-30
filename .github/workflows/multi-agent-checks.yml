@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - feature/multi-agent-rag
+      - fix/multi-agent-hardening
   pull_request:
     branches:
       - main
@@ -30,4 +31,4 @@ jobs:
         run: python -m compileall -q agent llm models rag utils tests
 
       - name: Run specialist-agent unit tests
-        run: python -m pytest -q tests/test_multi_agent.py tests/test_workflow_metrics.py
+        run: python -m pytest -q tests
