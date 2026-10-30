@@ -166,7 +166,7 @@ class WorkflowState:
     validation_error: str = ""
     sources: List[Dict[str, Any]] = field(default_factory=list)
     executed_tools: List[ToolExecution] = field(default_factory=list)
-    metrics: Dict[str, float] = field(default_factory=dict)
+    metrics: Dict[str, Any] = field(default_factory=dict)
     status: str = "Idle"
 
     def __getattr__(self, name: str) -> Any:
