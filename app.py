@@ -46,6 +46,8 @@ importlib.reload(rag.embeddings)
 from rag.embeddings import EmbeddingService
 from rag.vector_store import VectorStoreManager
 from rag.retriever import RAGRetriever
+from rag.evaluation import evaluate_retrieval
+from rag.benchmark import compare_llm_only_vs_rag
 from llm.llm_service import LLMService
 import agent.legal_research_agent
 importlib.reload(agent.legal_research_agent)
@@ -1358,7 +1360,7 @@ st.markdown("""
 # ─────────────────────────────────────────────
 # TABS
 # ─────────────────────────────────────────────
-tab_research, tab_history, tab_documents = st.tabs(["RESEARCH", "HISTORY", "CASE FILES"])
+tab_research, tab_history, tab_documents, tab_evaluation = st.tabs(["RESEARCH", "HISTORY", "CASE FILES", "RAG EVALUATION"])
 
 # ═══════════════════════════════════════════════
 # TAB 1 — RESEARCH
@@ -1882,3 +1884,115 @@ with tab_documents:
                 <div class="doc-status">Ready</div>
             </div>
             """, unsafe_allow_html=True)
+
+
+
+# ═══════════════════════════════════════════════
+# TAB 4 — RAG EVALUATION & BENCHMARKING
+# ═══════════════════════════════════════════════
+with tab_evaluation:
+    st.markdown('<div class="section-label-blue">Retrieval Evaluation</div>', unsafe_allow_html=True)
+    st.caption(
+        "Enter a legal-case question and optional ground-truth document names. "
+        "Relevance metrics are meaningful only when the labels reflect manually verified relevant records."
+    )
+
+    evaluation_query = st.text_input(
+        "Evaluation query",
+        placeholder="e.g. Compare the guard's statement with the CCTV exit log",
+        key="rag_eval_query",
+    )
+    relevant_documents_input = st.text_input(
+        "Relevant document filenames (comma-separated, optional)",
+        placeholder="02_Witness_Statements.txt, 03_CCTV_Analysis_Report.txt",
+        key="rag_eval_relevant_docs",
+    )
+    relevant_chunks_input = st.text_input(
+        "Relevant chunk IDs (comma-separated, optional)",
+        placeholder="chunk_id_1, chunk_id_2",
+        key="rag_eval_relevant_chunks",
+    )
+
+    eval_col1, eval_col2 = st.columns(2)
+    with eval_col1:
+        run_retrieval_eval = st.button("Evaluate Retrieval", type="primary", use_container_width=True)
+    with eval_col2:
+        run_latency_benchmark = st.button("Compare LLM-only vs RAG", use_container_width=True)
+
+    if run_retrieval_eval:
+        if not evaluation_query.strip():
+            st.warning("Enter a question before running retrieval evaluation.")
+        elif not relevant_documents_input.strip() and not relevant_chunks_input.strip():
+            st.warning("Add at least one verified relevant filename or chunk ID to calculate precision and recall.")
+        else:
+            try:
+                with st.spinner("Retrieving and scoring evidence..."):
+                    eval_chunks, eval_strength = retriever.retrieve_evidence(
+                        evaluation_query.strip(), top_k=top_k
+                    )
+                    eval_metrics = evaluate_retrieval(
+                        eval_chunks,
+                        relevant_document_names=[
+                            item.strip() for item in relevant_documents_input.split(",") if item.strip()
+                        ],
+                        relevant_chunk_ids=[
+                            item.strip() for item in relevant_chunks_input.split(",") if item.strip()
+                        ],
+                        k=top_k,
+                    )
+                st.markdown("**Retrieval results**")
+                st.caption(f"Evidence match rating: {eval_strength} · Retrieved {len(eval_chunks)} chunk(s)")
+                metric_cols = st.columns(4)
+                metric_cols[0].metric("Precision@K", f"{eval_metrics['precision_at_k']:.3f}")
+                metric_cols[1].metric("Recall@K", f"{eval_metrics['recall_at_k']:.3f}")
+                metric_cols[2].metric("F1@K", f"{eval_metrics['f1_at_k']:.3f}")
+                metric_cols[3].metric("MRR", f"{eval_metrics['reciprocal_rank']:.3f}")
+                st.json(eval_metrics)
+                with st.expander("Retrieved passages used in this evaluation", expanded=True):
+                    if not eval_chunks:
+                        st.info("No passages were retrieved.")
+                    for rank, chunk in enumerate(eval_chunks, 1):
+                        st.markdown(
+                            f"**{rank}. {chunk.document_name} · page {chunk.page_number} · "
+                            f"score {chunk.score:.3f}**"
+                        )
+                        st.code(chunk.text)
+            except Exception as exc:
+                st.error(f"Retrieval evaluation failed: {type(exc).__name__}: {exc}")
+
+    if run_latency_benchmark:
+        if not evaluation_query.strip():
+            st.warning("Enter a question before running the latency comparison.")
+        elif provider_choice == "local":
+            st.warning("The deterministic local fallback cannot provide an LLM-only generation baseline. Select Ollama, Gemini, or OpenAI.")
+        else:
+            try:
+                with st.spinner("Running direct LLM and RAG workflows..."):
+                    comparison = compare_llm_only_vs_rag(
+                        evaluation_query.strip(), retriever, llm_service, agent, top_k=top_k
+                    )
+                left, right = st.columns(2)
+                with left:
+                    st.markdown("**LLM-only baseline**")
+                    st.metric("Total latency", f"{comparison['llm_only']['latency_seconds']:.2f} s")
+                    st.write(comparison["llm_only"]["answer"])
+                with right:
+                    st.markdown("**RAG workflow**")
+                    st.metric("Total latency", f"{comparison['rag']['latency_seconds']:.2f} s")
+                    st.metric("Retrieval-only latency", f"{comparison['rag']['retrieval_latency_seconds']:.2f} s")
+                    st.caption(
+                        f"{comparison['rag']['retrieved_count']} passages retrieved · "
+                        f"{comparison['rag']['source_count']} cited sources · "
+                        f"evidence rating: {comparison['rag']['evidence_strength']}"
+                    )
+                    st.write(comparison["rag"]["answer"])
+                st.info(comparison["measurement_note"])
+                st.json({
+                    "llm_only_latency_seconds": comparison["llm_only"]["latency_seconds"],
+                    "rag_total_latency_seconds": comparison["rag"]["latency_seconds"],
+                    "rag_retrieval_latency_seconds": comparison["rag"]["retrieval_latency_seconds"],
+                    "rag_minus_llm_seconds": comparison["latency_delta_seconds"],
+                    "rag_workflow_status": comparison["rag"]["workflow_status"],
+                })
+            except Exception as exc:
+                st.error(f"Latency comparison failed: {type(exc).__name__}: {exc}")
