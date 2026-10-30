@@ -96,8 +96,8 @@ class RAGRetriever:
                 if ts in chunk_lower:
                     entity_boost += 0.30
 
-            if ("timeline" in search_query.lower() or "when did" in search_query.lower()) and any(t in chunk_lower for t in ["21:10", "21:12", "21:25", "21:39", "21:40", "21:45"]):
-                entity_boost += 0.15
+            if ("timeline" in search_query.lower() or "when did" in search_query.lower()) and re.search(r"\b\d{1,2}:\d{2}\b", chunk_lower):
+                entity_boost += 0.10
 
             # Hybrid Score calculation: 55% semantic + 45% lexical/entity
             lexical_score = min(1.0, lexical_ratio + entity_boost)
@@ -177,35 +177,36 @@ class RAGRetriever:
         return list(set(terms))
 
     def _generate_sub_queries(self, query: str, intent: Optional[str]) -> List[str]:
-        q_lower = query.lower()
-        sub_queries = []
+        """Generate case-agnostic retrieval prompts without injecting sample-case facts."""
+        q_lower = (query or "").lower()
+        sub_queries: List[str] = []
 
-        # Contradiction / Comparison between Witness and CCTV
         if ("witness" in q_lower or "guard" in q_lower) and ("cctv" in q_lower or "camera" in q_lower):
-            sub_queries.append("witness statement Ankit Sharma night security guard Apex Towers")
-            sub_queries.append("CCTV Analysis Report camera 01 camera 03 footage timeline")
+            sub_queries.extend([
+                "witness statement testimony observations date time",
+                "CCTV camera footage analysis timestamps entry exit",
+            ])
 
-        # Accused alibi check
-        if "alibi" in q_lower or "blue dart cafe" in q_lower or "aundh" in q_lower:
-            sub_queries.append("Accused statement Ramesh Kumar alibi Blue Dart Cafe Aundh")
-            sub_queries.append("Call Detail Records CDR cell tower Shivajinagar")
+        if "alibi" in q_lower:
+            sub_queries.extend([
+                "accused alibi statement location date time",
+                "call detail records cell tower location time",
+            ])
 
-        # Target the actual findings/results, not only the report header.
         if any(term in q_lower for term in ("forensic", "laboratory findings", "ballistic", "fingerprint", "dna", "g.s.r", "g sr")):
             sub_queries.extend([
-                "04_Forensic_Lab_Report laboratory findings results conclusion opinion",
-                "forensic laboratory analysis results matched excluded detected not detected",
+                "forensic laboratory findings results conclusion opinion",
+                "forensic analysis matched excluded detected not detected",
             ])
 
-        # Target the operative order and judicial reasoning separately from the prosecution summary.
         if any(term in q_lower for term in ("judgment", "judgement", "verdict", "court finding", "final order", "acquitted", "convicted")):
             sub_queries.extend([
-                "08_Court_Judgment final order court findings reasons verdict acquitted convicted sentence",
-                "judgment court held finds ordered accused guilty not guilty final decision",
+                "court judgment final order judicial findings reasons verdict sentence",
+                "operative order convicted acquitted sentenced court held",
             ])
 
-        if "weapon" in q_lower or "gun" in q_lower or "casing" in q_lower or "9mm" in q_lower:
-            sub_queries.append("Forensic Lab Report 9mm spent shell casing Item-A Item-B laboratory results")
+        if any(term in q_lower for term in ("weapon", "gun", "casing", "ballistic")):
+            sub_queries.append("forensic laboratory weapon firearm ballistic examination results")
 
         return list(dict.fromkeys(sub_queries))
 
