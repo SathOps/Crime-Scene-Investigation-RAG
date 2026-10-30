@@ -29,7 +29,7 @@ class VectorStoreManager:
 
     def _init_chroma(self):
         self.client = chromadb.PersistentClient(
-            path=str(self.persistent_dir / "chroma"),
+            path=str(self.persistent_dir),
             settings=Settings(allow_reset=True, anonymized_telemetry=False),
         )
         self.collection = self.client.get_or_create_collection(
