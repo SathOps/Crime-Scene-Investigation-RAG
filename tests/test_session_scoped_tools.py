@@ -1,0 +1,68 @@
+"""Regression tests for request-scoped legal tools and case-agnostic retrieval."""
+from agent.tools import build_legal_tools
+from rag.retriever import RAGRetriever
+
+
+class FakeRetriever:
+    def __init__(self, label):
+        self.label = label
+
+    def retrieve_evidence(self, **kwargs):
+        return [], "Insufficient"
+
+    def format_chunks_for_context(self, chunks):
+        return f"evidence from {self.label}"
+
+
+def test_tools_are_bound_to_their_own_retriever_instance():
+    first = {item.name: item for item in build_legal_tools(FakeRetriever("case A"))}
+    second = {item.name: item for item in build_legal_tools(FakeRetriever("case B"))}
+
+    result_a = first["retrieve_case_evidence"].invoke({"query": "find evidence"})
+    result_b = second["retrieve_case_evidence"].invoke({"query": "find evidence"})
+
+    assert "case A" not in result_a
+    assert "case B" not in result_b
+    assert "current case-file index" in result_a
+    assert "current case-file index" in result_b
+
+
+def test_analysis_tools_require_explicit_request_evidence():
+    tools = {item.name: item for item in build_legal_tools(FakeRetriever("isolated"))}
+    summary = tools["summarize_case_facts"].invoke({"evidence_text": ""})
+    timeline = tools["extract_timeline_events"].invoke({"evidence_text": ""})
+    contradiction = tools["analyze_witness_contradictions"].invoke({"evidence_text": ""})
+
+    assert "No retrieved case evidence" in summary
+    assert "No retrieved evidence" in timeline
+    assert "No retrieved evidence" in contradiction
+
+
+def test_subqueries_do_not_inject_sample_case_names_or_locations():
+    retriever = RAGRetriever.__new__(RAGRetriever)
+    queries = retriever._generate_sub_queries(
+        "Compare witness statements with CCTV and assess the alibi.",
+        "CONTRADICTION_ANALYSIS",
+    )
+    joined = " ".join(queries).lower()
+
+    for sample_detail in ("ankit sharma", "apex towers", "ramesh kumar",
+                          "blue dart cafe", "aundh", "shivajinagar"):
+        assert sample_detail not in joined
+
+    assert any("witness statement" in query.lower() for query in queries)
+    assert any("cctv" in query.lower() for query in queries)
+
+
+def test_forensic_and_judgment_expansion_is_generic():
+    retriever = RAGRetriever.__new__(RAGRetriever)
+    queries = retriever._generate_sub_queries(
+        "Retrieve forensic findings and final court judgment.",
+        "COURT_FINDINGS",
+    )
+    joined = " ".join(queries).lower()
+
+    assert "forensic laboratory findings" in joined
+    assert "court judgment final order" in joined
+    assert "04_forensic_lab_report" not in joined
+    assert "08_court_judgment" not in joined
