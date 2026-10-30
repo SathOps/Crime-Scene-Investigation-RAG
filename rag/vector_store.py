@@ -1,120 +1,222 @@
-import os
-import shutil
+import hashlib
+import json
 from pathlib import Path
 from typing import List, Dict, Any
+
 import chromadb
 from chromadb.config import Settings
+import numpy as np
+
 from models.schemas import DocumentChunk
 from rag.embeddings import EmbeddingService
-from config import VECTORSTORE_DIR
+from config import VECTORSTORE_DIR, DEFAULT_VECTOR_STORE_BACKEND
+
 
 class VectorStoreManager:
-    """Manages persistent ChromaDB vector storage for legal document chunks."""
+    """Persistent vector storage with ChromaDB (default) or optional FAISS CPU."""
 
-    def __init__(self, persistent_dir: Path = VECTORSTORE_DIR):
-        self.persistent_dir = persistent_dir
+    def __init__(self, persistent_dir: Path = VECTORSTORE_DIR, backend: str = None):
+        self.persistent_dir = Path(persistent_dir)
+        self.backend = (backend or DEFAULT_VECTOR_STORE_BACKEND).lower()
+        if self.backend not in {"chroma", "faiss"}:
+            raise ValueError("VECTOR_STORE_BACKEND must be either 'chroma' or 'faiss'.")
         self.collection_name = "legal_case_chunks"
-        self._init_db()
-
-    def _init_db(self):
         self.persistent_dir.mkdir(parents=True, exist_ok=True)
+        if self.backend == "faiss":
+            self._init_faiss()
+        else:
+            self._init_chroma()
+
+    def _init_chroma(self):
         self.client = chromadb.PersistentClient(
-            path=str(self.persistent_dir),
-            settings=Settings(allow_reset=True, anonymized_telemetry=False)
+            path=str(self.persistent_dir / "chroma"),
+            settings=Settings(allow_reset=True, anonymized_telemetry=False),
         )
         self.collection = self.client.get_or_create_collection(
             name=self.collection_name,
-            metadata={"hnsw:space": "cosine"}
+            metadata={"hnsw:space": "cosine"},
+        )
+
+    def _init_faiss(self):
+        try:
+            import faiss
+        except ImportError as exc:
+            raise RuntimeError(
+                "FAISS backend selected but faiss-cpu is not installed. "
+                "Install it with: python -m pip install faiss-cpu"
+            ) from exc
+        self._faiss = faiss
+        self._faiss_index_path = self.persistent_dir / "legal_case_chunks.faiss"
+        self._faiss_records_path = self.persistent_dir / "legal_case_chunks.json"
+        self._faiss_records: Dict[str, Dict[str, Any]] = {}
+        if self._faiss_index_path.exists() and self._faiss_records_path.exists():
+            self.index = faiss.read_index(str(self._faiss_index_path))
+            self._faiss_records = json.loads(self._faiss_records_path.read_text(encoding="utf-8"))
+        else:
+            self.index = None
+
+    @staticmethod
+    def _faiss_id(chunk_id: str) -> int:
+        raw = hashlib.blake2b(chunk_id.encode("utf-8"), digest_size=8).digest()
+        return int.from_bytes(raw, byteorder="big", signed=True)
+
+    @staticmethod
+    def _normalized_matrix(vectors):
+        matrix = np.asarray(vectors, dtype="float32")
+        if matrix.ndim != 2:
+            raise ValueError("Embedding vectors must form a two-dimensional matrix.")
+        norms = np.linalg.norm(matrix, axis=1, keepdims=True)
+        return matrix / np.maximum(norms, 1e-12)
+
+    def _save_faiss(self):
+        if self.index is not None:
+            self._faiss.write_index(self.index, str(self._faiss_index_path))
+        self._faiss_records_path.write_text(
+            json.dumps(self._faiss_records, ensure_ascii=False),
+            encoding="utf-8",
         )
 
     def add_chunks(self, chunks: List[DocumentChunk], embedding_service: EmbeddingService):
         if not chunks:
             return
-
-        texts = [c.text for c in chunks]
+        texts = [chunk.text for chunk in chunks]
         embeddings = embedding_service.embed_texts(texts)
-        ids = [c.chunk_id for c in chunks]
+        if len(embeddings) != len(chunks):
+            raise ValueError("Embedding service returned a different number of vectors than chunks.")
+
+        if self.backend == "faiss":
+            matrix = self._normalized_matrix(embeddings)
+            dimension = matrix.shape[1]
+            if self.index is None:
+                self.index = self._faiss.IndexIDMap2(self._faiss.IndexFlatIP(dimension))
+            elif self.index.d != dimension:
+                raise ValueError(
+                    f"Embedding dimension changed from {self.index.d} to {dimension}; "
+                    "use a separate vector-store directory for this embedding model."
+                )
+            for chunk, vector in zip(chunks, matrix):
+                faiss_id = self._faiss_id(chunk.chunk_id)
+                self.index.remove_ids(np.asarray([faiss_id], dtype="int64"))
+                self._faiss_records[str(faiss_id)] = {
+                    "chunk_id": chunk.chunk_id,
+                    "document_name": chunk.document_name,
+                    "document_type": chunk.document_type,
+                    "page_number": int(chunk.page_number),
+                    "case_name": chunk.case_name,
+                    "text": chunk.text,
+                }
+                self.index.add_with_ids(
+                    np.asarray([vector], dtype="float32"),
+                    np.asarray([faiss_id], dtype="int64"),
+                )
+            self._save_faiss()
+            return
+
+        ids = [chunk.chunk_id for chunk in chunks]
         metadatas = [
             {
-                "document_name": c.document_name,
-                "document_type": c.document_type,
-                "page_number": int(c.page_number),
-                "case_name": c.case_name
+                "document_name": chunk.document_name,
+                "document_type": chunk.document_type,
+                "page_number": int(chunk.page_number),
+                "case_name": chunk.case_name,
             }
-            for c in chunks
+            for chunk in chunks
         ]
-
-        # Add to ChromaDB in batches to prevent payload limits
         batch_size = 100
-        for i in range(0, len(chunks), batch_size):
-            end_idx = min(i + batch_size, len(chunks))
+        for start in range(0, len(chunks), batch_size):
+            end = min(start + batch_size, len(chunks))
             self.collection.upsert(
-                ids=ids[i:end_idx],
-                embeddings=embeddings[i:end_idx],
-                documents=texts[i:end_idx],
-                metadatas=metadatas[i:end_idx]
+                ids=ids[start:end],
+                embeddings=embeddings[start:end],
+                documents=texts[start:end],
+                metadatas=metadatas[start:end],
             )
 
     def search(self, query: str, top_k: int, embedding_service: EmbeddingService) -> List[DocumentChunk]:
+        if top_k <= 0:
+            return []
         query_embedding = embedding_service.embed_query(query)
         if not query_embedding:
             return []
 
+        if self.backend == "faiss":
+            if self.index is None or self.index.ntotal == 0:
+                return []
+            vector = self._normalized_matrix([query_embedding])
+            if vector.shape[1] != self.index.d:
+                raise ValueError("Query embedding dimension does not match the indexed documents.")
+            scores, ids = self.index.search(vector, min(top_k, self.index.ntotal))
+            retrieved = []
+            for score, faiss_id in zip(scores[0], ids[0]):
+                if int(faiss_id) == -1:
+                    continue
+                record = self._faiss_records.get(str(int(faiss_id)))
+                if not record:
+                    continue
+                retrieved.append(DocumentChunk(
+                    chunk_id=record["chunk_id"],
+                    document_name=record["document_name"],
+                    document_type=record["document_type"],
+                    page_number=int(record["page_number"]),
+                    case_name=record.get("case_name", "Unknown Case"),
+                    text=record["text"],
+                    score=round(max(0.0, min(1.0, float(score))), 3),
+                ))
+            return retrieved
+
         results = self.collection.query(
             query_embeddings=[query_embedding],
-            n_results=top_k,
-            include=["documents", "metadatas", "distances"]
+            n_results=min(top_k, self.collection.count()),
+            include=["documents", "metadatas", "distances"],
         )
-
         retrieved: List[DocumentChunk] = []
         if results and results.get("documents") and results["documents"][0]:
-            docs = results["documents"][0]
-            ids = results["ids"][0]
-            metadatas = results["metadatas"][0]
-            distances = results["distances"][0]
-
-            for idx in range(len(docs)):
-                # Chroma cosine distance range: 0.0 (identical) to 2.0. Convert to similarity score.
-                dist = distances[idx] if idx < len(distances) else 1.0
-                score = round(max(0.0, 1.0 - dist), 3)
-                meta = metadatas[idx]
-
-                chunk = DocumentChunk(
-                    chunk_id=ids[idx],
-                    document_name=meta.get("document_name", "Unknown"),
-                    document_type=meta.get("document_type", "Legal Document"),
-                    page_number=int(meta.get("page_number", 1)),
-                    case_name=meta.get("case_name", "Unknown Case"),
-                    text=docs[idx],
-                    score=score
-                )
-                retrieved.append(chunk)
-
+            for idx, text in enumerate(results["documents"][0]):
+                distance = results["distances"][0][idx]
+                metadata = results["metadatas"][0][idx]
+                retrieved.append(DocumentChunk(
+                    chunk_id=results["ids"][0][idx],
+                    document_name=metadata.get("document_name", "Unknown"),
+                    document_type=metadata.get("document_type", "Legal Document"),
+                    page_number=int(metadata.get("page_number", 1)),
+                    case_name=metadata.get("case_name", "Unknown Case"),
+                    text=text,
+                    score=round(max(0.0, 1.0 - distance), 3),
+                ))
         return retrieved
 
     def get_stats(self) -> Dict[str, Any]:
+        if self.backend == "faiss":
+            records = list(self._faiss_records.values())
+            documents = sorted({record["document_name"] for record in records})
+            return {
+                "total_chunks": len(records),
+                "total_documents": len(documents),
+                "documents_list": documents,
+            }
         count = self.collection.count()
-        # Retrieve unique documents
         results = self.collection.get(include=["metadatas"])
-        unique_docs = set()
-        if results and results.get("metadatas"):
-            for meta in results["metadatas"]:
-                if meta and "document_name" in meta:
-                    unique_docs.add(meta["document_name"])
-
+        unique_docs = {
+            metadata["document_name"]
+            for metadata in (results.get("metadatas") or [])
+            if metadata and "document_name" in metadata
+        }
         return {
             "total_chunks": count,
             "total_documents": len(unique_docs),
-            "documents_list": sorted(list(unique_docs))
+            "documents_list": sorted(unique_docs),
         }
 
     def clear_store(self):
+        if self.backend == "faiss":
+            self.index = None
+            self._faiss_records = {}
+            for path in (self._faiss_index_path, self._faiss_records_path):
+                if path.exists():
+                    path.unlink()
+            return
         try:
-            self.client.reset()
+            self.client.delete_collection(self.collection_name)
         except Exception:
-            try:
-                self.client.delete_collection(self.collection_name)
-            except Exception:
-                pass
-        self._init_db()
-
+            pass
+        self._init_chroma()
