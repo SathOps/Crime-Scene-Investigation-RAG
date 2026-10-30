@@ -8,7 +8,7 @@ from langchain_core.messages import HumanMessage, AIMessage, ToolMessage, System
 from models.schemas import IntentType, DocumentChunk, WorkflowStep, WorkflowState, LegalResearchAnswer, ToolExecution
 from rag.retriever import RAGRetriever
 from llm.llm_service import LLMService
-from agent.tools import LEGAL_TOOLS, TOOLS_BY_NAME, set_global_retriever, set_global_context
+from agent.tools import build_legal_tools
 from agent.specialist_agents import MultiAgentCoordinator
 from utils.query_normalizer import QueryNormalizer, NormalizedQuery
 from utils.intent_classifier import IntentClassifier
@@ -79,9 +79,8 @@ class LegalResearchAgent:
     def __init__(self, retriever: RAGRetriever, llm_service: LLMService):
         self.retriever = retriever
         self.llm_service = llm_service
-        set_global_retriever(self.retriever)
-        self.tools = LEGAL_TOOLS
-        self.tools_by_name = TOOLS_BY_NAME
+        self.tools = build_legal_tools(self.retriever)
+        self.tools_by_name = {registered_tool.name: registered_tool for registered_tool in self.tools}
         self.multi_agent_coordinator = MultiAgentCoordinator(llm_service)
 
     def identify_intent(self, query: str, norm_obj: Optional[NormalizedQuery] = None) -> IntentType:
@@ -101,23 +100,30 @@ class LegalResearchAgent:
             "Validate output schema against Pydantic LegalResearchAnswer model"
         ]
 
-    def execute_tool_calling_loop(self, query: str, state: WorkflowState) -> str:
-        """Executes iterative LLM tool calling using LangChain messages protocol."""
-        if self.llm_service.provider == "local":
+    def execute_tool_calling_loop(self, query: str, state: WorkflowState, evidence_context: str = "") -> str:
+        """Execute tools bound to this agent instance and this request's evidence only."""
+        if self.llm_service.provider not in {"ollama", "openai"}:
+            state.metrics["tool_loop_status"] = "skipped"
+            state.metrics["tool_loop_reason"] = (
+                f"No LangChain tool-calling adapter is configured for provider '{self.llm_service.provider}'."
+            )
             return ""
 
-        chat_model = self.llm_service.get_chat_model()
-        
         try:
+            chat_model = self.llm_service.get_chat_model()
             llm_with_tools = chat_model.bind_tools(self.tools)
         except Exception as e:
-            logger.warning(f"Model bind_tools failed ({e}), falling back to direct tool invocation.")
-            llm_with_tools = chat_model
+            logger.exception("Tool-capable chat model initialization failed")
+            state.metrics["tool_loop_status"] = "failed"
+            state.metrics["tool_loop_reason"] = f"{type(e).__name__}: {e}"
+            return ""
 
         system_msg = SystemMessage(content=(
             "You are an expert Legal Research Agent. Analyze legal case questions, determine if specialized tools "
             "like `retrieve_case_evidence`, `extract_timeline_events`, `analyze_witness_contradictions`, or "
-            "`summarize_case_facts` are required, invoke them appropriately, and synthesize a comprehensive answer."
+            "`summarize_case_facts` are required. For analysis tools, pass the supplied evidence_text argument. "
+            "Never invent facts or cite tool analysis as a primary source.\n\n"
+            "REQUEST-SCOPED RETRIEVED EVIDENCE:\n" + (evidence_context or "No evidence supplied.")
         ))
 
         messages = [system_msg, HumanMessage(content=query)]
@@ -130,7 +136,9 @@ class LegalResearchAgent:
             try:
                 response = llm_with_tools.invoke(messages)
             except Exception as e:
-                logger.error(f"[AGENT LLM ERROR] {e}")
+                logger.exception("[AGENT LLM ERROR]")
+                state.metrics["tool_loop_status"] = "failed"
+                state.metrics["tool_loop_reason"] = f"{type(e).__name__}: {e}"
                 break
 
             messages.append(response)
@@ -202,6 +210,10 @@ class LegalResearchAgent:
                 final_response_str = str(m.content)
                 break
 
+        if state.metrics.get("tool_loop_status") != "failed":
+            state.metrics["tool_loop_status"] = "completed" if state.executed_tools else "no_tool_calls"
+            if iteration >= MAX_TOOL_ITERATIONS:
+                state.metrics["tool_loop_status"] = "iteration_limit"
         return final_response_str
 
     def run_workflow(
@@ -306,9 +318,7 @@ class LegalResearchAgent:
         state.retrieved_chunks = chunks
         state.evidence_strength = strength
 
-        # Set global context buffer for agent tools
         formatted_context = self.retriever.format_chunks_for_context(chunks)
-        set_global_context(formatted_context)
 
         state.steps[-1].status = "completed"
         state.steps[-1].detail = f"Retrieved {len(chunks)} chunks (Evidence Strength: {strength})"
@@ -391,18 +401,19 @@ class LegalResearchAgent:
                 step_status = "failed"
                 detail = result.error[:500]
             else:
-                step_status = "completed"
+                step_status = "skipped"
                 detail = f"Skipped: {result.error or 'No specialist analysis performed.'}"
             state.steps.append(WorkflowStep(
                 f"Agent — {result.agent_name}",
                 step_status,
                 detail,
             ))
-        specialist_step.status = (
-            "completed"
-            if successful_specialists or not any(result.status == "failed" for result in specialist_results)
-            else "failed"
-        )
+        if any(result.status == "failed" for result in specialist_results) and not successful_specialists:
+            specialist_step.status = "failed"
+        elif successful_specialists:
+            specialist_step.status = "completed"
+        else:
+            specialist_step.status = "skipped"
         specialist_step.detail = (
             f"Completed {successful_specialists} of {len(specialist_results)} specialist analyses. "
             "Specialist notes are secondary analysis; final synthesis still uses retrieved source passages."
@@ -420,13 +431,13 @@ class LegalResearchAgent:
         )
         state.steps.append(tool_loop_step)
         tool_loop_output = self.execute_tool_calling_loop(
-            state.normalized_query, state
+            state.normalized_query, state, evidence_context=specialist_context
         )
-        tool_loop_step.status = "completed"
-        report("Tool-calling stage complete. Generating the final structured answer.")
+        tool_status = state.metrics.get("tool_loop_status", "completed")
+        tool_loop_step.status = "skipped" if tool_status == "skipped" else ("failed" if tool_status == "failed" else "completed")
+        report("Tool-calling stage " + str(tool_status) + ". Generating the final structured answer.")
         tool_loop_step.detail = (
-            f"Tool calling loop finished with "
-            f"{len(state.executed_tools)} tools executed"
+            f"Tool-calling status: {tool_status}; {len(state.executed_tools)} tools executed."
         )
 
         # 7. STRUCTURED RESPONSE & PYDANTIC VALIDATION

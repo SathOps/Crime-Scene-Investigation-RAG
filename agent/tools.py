@@ -1,160 +1,100 @@
-"""LangChain Tool Registry for Legal Intelligence Platform.
-
-Converts existing deterministic retriever and analysis functions into proper
-LangChain `@tool` instances for dynamic LLM tool calling.
-"""
-
-from typing import List, Dict, Any, Optional
+"""Stateless, session-safe LangChain tools for legal case research."""
+from typing import List
 from langchain_core.tools import tool
 from utils.query_normalizer import QueryNormalizer
 
-# Forward references / tool wrappers initialized with instance context
-_GLOBAL_RETRIEVER = None
-_GLOBAL_CONTEXT_BUFFER = ""
 
-def set_global_retriever(retriever):
-    """Sets the global RAGRetriever instance for tool access."""
-    global _GLOBAL_RETRIEVER
-    _GLOBAL_RETRIEVER = retriever
+def build_legal_tools(retriever):
+    """Build tools bound to one retriever instance; evidence is passed per invocation."""
 
-def set_global_context(text: str):
-    """Sets the global context text buffer for tools that analyze evidence."""
-    global _GLOBAL_CONTEXT_BUFFER
-    _GLOBAL_CONTEXT_BUFFER = text
+    @tool
+    def retrieve_case_evidence(query: str, top_k: int = 5) -> str:
+        """Retrieve evidence from this research session's case-file vector store.
 
-@tool
-def retrieve_case_evidence(query: str, top_k: int = 5) -> str:
-    """Retrieve relevant case evidence, FIR records, witness statements, forensic reports, and court findings from the persistent vector store.
-    Use this tool whenever you need factual evidence, specific details, quotes, or context from the case files to answer a question.
-
-    Args:
-        query: The search query string for retrieving legal evidence.
-        top_k: Number of relevant evidence passages to retrieve (default: 5).
-    """
-    global _GLOBAL_RETRIEVER, _GLOBAL_CONTEXT_BUFFER
-    if _GLOBAL_RETRIEVER is None:
-        return "Error: Vector store retriever is not initialized."
-    
-    try:
-        norm_obj = QueryNormalizer.normalize(query)
-        chunks, strength = _GLOBAL_RETRIEVER.retrieve_evidence(
+        Args:
+            query: Search terms describing the evidence needed.
+            top_k: Maximum number of passages to return.
+        """
+        norm = QueryNormalizer.normalize(query)
+        chunks, strength = retriever.retrieve_evidence(
             query=query,
-            top_k=top_k,
-            normalized_query=norm_obj.normalized_query,
-            entities=norm_obj.entities_preserved
+            top_k=max(1, min(int(top_k), 12)),
+            normalized_query=norm.normalized_query,
+            entities=norm.entities_preserved,
         )
         if not chunks:
-            return "No relevant evidence chunks found in the knowledge base."
-        
-        formatted_passages = []
-        for idx, chunk in enumerate(chunks, 1):
-            formatted_passages.append(
-                f"[Evidence Item {idx}]\n"
-                f"Document: {chunk.document_name} (Type: {chunk.document_type}, Page {chunk.page_number})\n"
-                f"Content: {chunk.text.strip()}\n"
-            )
-        
-        result_text = f"Evidence Strength: {strength}\n\n" + "\n---\n".join(formatted_passages)
-        _GLOBAL_CONTEXT_BUFFER = result_text
-        return result_text
-    except Exception as e:
-        return f"Tool Execution Error during retrieval: {str(e)}"
+            return "No relevant evidence chunks were found in the current case-file index."
+        return "Evidence relevance (not proof strength): " + strength + "\n\n" + retriever.format_chunks_for_context(chunks)
 
-@tool
-def extract_timeline_events(evidence_text: str = "") -> str:
-    """Extract chronological dates, timestamps, and sequential incident events from legal evidence text.
-    Use this tool when answering timeline, sequence of events, or chronological questions.
+    @tool
+    def extract_timeline_events(evidence_text: str) -> str:
+        """Extract dates and times from supplied retrieved evidence.
 
-    Args:
-        evidence_text: Text containing legal evidence or case documents. If empty, uses active retrieved case context.
-    """
-    import re
-    global _GLOBAL_CONTEXT_BUFFER
-    text_to_analyze = evidence_text.strip() if evidence_text and evidence_text.strip() else _GLOBAL_CONTEXT_BUFFER
+        Args:
+            evidence_text: Retrieved source passages, including document and page labels.
+        """
+        import re
+        text = (evidence_text or "").strip()
+        if not text:
+            return "No retrieved evidence was supplied; no timeline can be extracted."
+        pattern = r'(\b\d{1,2}\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+\d{4}\b|\b\d{1,2}/\d{1,2}/\d{2,4}\b|\b\d{4}-\d{2}-\d{2}\b|\b\d{1,2}:\d{2}\s*(?:HRS|AM|PM)\b)'
+        events, seen = [], set()
+        for match in re.finditer(pattern, text, re.IGNORECASE):
+            stamp = match.group(0)
+            if stamp.lower() in seen:
+                continue
+            seen.add(stamp.lower())
+            start, end = max(0, match.start()-100), min(len(text), match.end()+160)
+            events.append(f"- {stamp}: {text[start:end].replace(chr(10), ' ').strip()}")
+        return "\n".join(events) if events else "No explicit dates or timestamps were found in the supplied passages."
 
-    if not text_to_analyze:
-        return "No evidence text provided for timeline extraction."
-    
-    date_pattern = r'(\b\d{1,2}\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+\d{4}\b|\b\d{1,2}/\d{1,2}/\d{2,4}\b|\b\d{4}-\d{2}-\d{2}\b|\b\d{1,2}:\d{2}\s*(?:HRS|AM|PM|hrs)\b)'
-    matches = list(re.finditer(date_pattern, text_to_analyze, re.IGNORECASE))
-    
-    if not matches:
-        return "No specific chronological dates or timestamp markers found in the provided text."
-    
-    events = []
-    seen_dates = set()
-    for m in matches:
-        date_str = m.group(0).upper()
-        if date_str in seen_dates:
-            continue
-        seen_dates.add(date_str)
-        start = max(0, m.start() - 40)
-        end = min(len(text_to_analyze), m.end() + 120)
-        snippet = text_to_analyze[start:end].strip().replace("\n", " ")
-        events.append(f"• **{date_str}**: ...{snippet}...")
-    
-    return "Extracted Chronological Timeline:\n" + "\n".join(events)
+    @tool
+    def analyze_witness_contradictions(evidence_text: str) -> str:
+        """Identify potentially inconsistent witness and physical-evidence passages.
 
-@tool
-def analyze_witness_contradictions(evidence_text: str = "") -> str:
-    """Compare statements and witness depositions to identify contradictions, discrepancies, or timeline inconsistencies.
-    Use this tool when evaluating witness statements, conflicting reports, or alibi claims.
+        Args:
+            evidence_text: Retrieved source passages, including document and page labels.
+        """
+        text = (evidence_text or "").strip()
+        if not text:
+            return "No retrieved evidence was supplied; contradiction analysis was not performed."
+        lines = [line.strip() for line in text.splitlines() if line.strip()]
+        relevant = [line for line in lines if any(term in line.lower() for term in (
+            "witness", "statement", "deposed", "testified", "cctv", "camera", "alibi", "observed", "recorded"
+        ))]
+        if not relevant:
+            return "No clearly labelled witness or physical-evidence passages were identified."
+        return (
+            "Potentially relevant passages for comparison (not a finding that they contradict):\n"
+            + "\n".join(f"- {line}" for line in relevant[:12])
+            + "\nA contradiction must be established by comparing the underlying claims, sources, and time/context."
+        )
 
-    Args:
-        evidence_text: Text containing witness statements, depositions, or police reports. If empty, uses active retrieved case context.
-    """
-    global _GLOBAL_CONTEXT_BUFFER
-    text_to_analyze = evidence_text.strip() if evidence_text and evidence_text.strip() else _GLOBAL_CONTEXT_BUFFER
+    @tool
+    def summarize_case_facts(evidence_text: str) -> str:
+        """Return retrieved excerpts for source-attributed case-fact synthesis.
 
-    if not text_to_analyze:
-        return "No witness statements provided for contradiction analysis."
-    
-    lines = [line.strip() for line in text_to_analyze.split('\n') if line.strip()]
-    witness_excerpts = [line for line in lines if any(w in line.lower() for w in ["witness", "statement", "saw", "claimed", "guard", "deposed", "stated", "alibi", "camera", "cctv"])]
-    
-    if not witness_excerpts:
-        return "Cross-examination summary: No explicit witness statements identified in the provided evidence buffer."
-    
-    analysis = [
-        "Witness Testimony & Cross-Examination Analysis:",
-        f"Analyzed {len(witness_excerpts)} witness and physical evidence passages for discrepancies.",
-        "Passages extracted for cross-comparison:"
+        Args:
+            evidence_text: Retrieved source passages, including document and page labels.
+        """
+        text = (evidence_text or "").strip()
+        if not text:
+            return "No retrieved case evidence is available to summarize."
+        return (
+            "Retrieved source excerpts follow. Preserve each source's procedural role and "
+            "do not treat allegations, testimony, forensic findings, and judicial findings as interchangeable. "
+            "These excerpts do not independently establish guilt.\n\n" + text[:16000]
+        )
+
+    return [
+        retrieve_case_evidence,
+        extract_timeline_events,
+        analyze_witness_contradictions,
+        summarize_case_facts,
     ]
-    for idx, excerpt in enumerate(witness_excerpts[:6], 1):
-        analysis.append(f"{idx}. {excerpt}")
-    
-    return "\n".join(analysis)
 
-@tool
-def summarize_case_facts(case_title: str = "") -> str:
-    """Summarize case facts from the active retrieved evidence context only.
 
-    Args:
-        case_title: Optional case title or reference. Do not use placeholders.
-    """
-    global _GLOBAL_CONTEXT_BUFFER
-    context = (_GLOBAL_CONTEXT_BUFFER or "").strip()
-    if not context:
-        return "No retrieved case evidence is available to summarize."
-
-    title = (case_title or "").strip()
-    if title.lower() in {"your case title here", "case title", "unknown", "n/a", "none"}:
-        title = ""
-    heading = f"Case Overview [{title}]" if title else "Case Overview (based on retrieved excerpts)"
-    return (
-        f"{heading}:\n"
-        "The following are retrieved source excerpts. Treat each claim according to its "
-        "source type and preserve disagreements between documents; this tool does not "
-        "independently establish guilt or resolve conflicting timelines.\n\n"
-        + context[:12000]
-    )
-
-# Central Tool Registry
-LEGAL_TOOLS = [
-    retrieve_case_evidence,
-    extract_timeline_events,
-    analyze_witness_contradictions,
-    summarize_case_facts
-]
-
-TOOLS_BY_NAME = {tool.name: tool for tool in LEGAL_TOOLS}
+# Backwards-compatible registry for integrations that inspect available tool names.
+# Runtime agents should use build_legal_tools(retriever) to bind their own retriever.
+LEGAL_TOOLS = []
+TOOLS_BY_NAME = {}
