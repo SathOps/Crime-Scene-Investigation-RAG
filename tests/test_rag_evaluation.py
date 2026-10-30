@@ -78,3 +78,11 @@ def test_benchmark_retrieval_rejects_blank_queries():
 
     with pytest.raises(ValueError, match="non-empty query"):
         benchmark_retrieval(object(), [{"query": " "}])
+
+
+def test_default_legal_evaluation_cases_include_relevant_and_out_of_scope_queries():
+    from rag.evaluation import DEFAULT_LEGAL_EVALUATION_CASES
+
+    assert len(DEFAULT_LEGAL_EVALUATION_CASES) >= 2
+    assert any(case.get("relevant_documents") for case in DEFAULT_LEGAL_EVALUATION_CASES)
+    assert any(not case.get("relevant_documents") for case in DEFAULT_LEGAL_EVALUATION_CASES)
