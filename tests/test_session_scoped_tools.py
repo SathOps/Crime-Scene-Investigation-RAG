@@ -88,4 +88,4 @@ def test_unsupported_tool_calling_provider_is_reported_as_skipped():
 
     assert result == ""
     assert state.metrics["tool_loop_status"] == "skipped"
-    assert "no LangChain tool-calling adapter" in state.metrics["tool_loop_reason"]
+    assert "no langchain tool-calling adapter" in state.metrics["tool_loop_reason"].lower()
