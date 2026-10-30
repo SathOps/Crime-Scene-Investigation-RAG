@@ -22,6 +22,7 @@ SAMPLE_DATA_DIR.mkdir(parents=True, exist_ok=True)
 DEFAULT_CHUNK_SIZE = 1000  # characters / token approximation
 DEFAULT_CHUNK_OVERLAP = 150
 DEFAULT_TOP_K = 5
+DEFAULT_VECTOR_STORE_BACKEND = os.getenv("VECTOR_STORE_BACKEND", "chroma").strip().lower()
 
 # LLM & Embedding Settings
 DEFAULT_LLM_PROVIDER = os.getenv("LLM_PROVIDER", "ollama")  # options: ollama, gemini, openai, local
