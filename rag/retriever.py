@@ -52,6 +52,7 @@ class RAGRetriever:
         # 3. Lexical & Entity Scoring
         query_terms = self._extract_query_keywords(search_query)
         target_entities = [e.lower() for e in (entities or [])]
+        max_vec_score = max((c.score for c in candidates.values()), default=0.0)
 
         scored_chunks: List[Tuple[float, DocumentChunk]] = []
         for chunk in candidates.values():
@@ -108,24 +109,47 @@ class RAGRetriever:
             lexical_score = min(1.0, lexical_ratio + entity_boost)
             hybrid_score = round(min(1.0, 0.55 * vec_score + 0.45 * lexical_score), 3)
 
-            # Assign hybrid score to chunk
-            chunk.score = hybrid_score
-            scored_chunks.append((hybrid_score, chunk))
+            # Create a clone so original vector-store chunks are not mutated in place
+            scored_chunk = DocumentChunk(
+                chunk_id=chunk.chunk_id,
+                document_name=chunk.document_name,
+                document_type=chunk.document_type,
+                page_number=chunk.page_number,
+                text=chunk.text,
+                score=hybrid_score
+            )
+            scored_chunks.append((hybrid_score, scored_chunk))
 
-        # 4. Deduplication & Reranking
+        # 4. Deduplication & Multi-Source Diversity Reranking
         scored_chunks.sort(key=lambda x: x[0], reverse=True)
         deduped_chunks: List[DocumentChunk] = []
         seen_texts: Set[str] = set()
+        doc_counts: Dict[str, int] = {}
+        max_chunks_per_doc = max(2, top_k // 2) if top_k >= 4 else top_k
 
+        # Pass 1: Select top chunks while enforcing document diversity cap
+        remaining_candidates: List[DocumentChunk] = []
         for score, chunk in scored_chunks:
-            # Check for significant text overlap (>80% similarity with already added chunk)
             snippet = chunk.text[:120].strip()
             if snippet in seen_texts:
                 continue
             seen_texts.add(snippet)
-            deduped_chunks.append(chunk)
-            if len(deduped_chunks) >= top_k:
-                break
+
+            doc_name = chunk.document_name or "Unknown"
+            if doc_counts.get(doc_name, 0) < max_chunks_per_doc:
+                deduped_chunks.append(chunk)
+                doc_counts[doc_name] = doc_counts.get(doc_name, 0) + 1
+                if len(deduped_chunks) >= top_k:
+                    break
+            else:
+                remaining_candidates.append(chunk)
+
+        # Pass 2: If diversity cap left empty slots, fill from remaining highest scoring candidates
+        if len(deduped_chunks) < top_k:
+            for chunk in remaining_candidates:
+                deduped_chunks.append(chunk)
+                if len(deduped_chunks) >= top_k:
+                    break
 
         # 5. Calibrate Evidence Strength Thresholds
         if not deduped_chunks:
@@ -165,7 +189,7 @@ class RAGRetriever:
         elif is_contradiction_query and has_witness_context and max_score >= 0.38:
             # Contradiction query with witness context must not be rejected on missing lexical tokens
             strength = "High" if (max_score >= 0.60 or avg_score >= 0.45) else "Medium"
-        elif max_score < 0.40 or (best_term_ratio < 0.25 and not has_entity_match and max_score < 0.52):
+        elif max_score < 0.40 or (best_term_ratio < 0.25 and not has_entity_match and max_score < 0.52 and max_vec_score < 0.65):
             strength = "Insufficient"
         elif max_score >= 0.65 or avg_score >= 0.50:
             strength = "High"
@@ -213,6 +237,12 @@ class RAGRetriever:
         """Generate case-agnostic retrieval prompts without injecting sample-case facts."""
         q_lower = (query or "").lower()
         sub_queries: List[str] = []
+
+        if any(term in q_lower for term in ("what happened", "case summary", "facts of the case", "overview", "prosecution", "connects the accused")):
+            sub_queries.extend([
+                "prosecution case summary allegations incident facts charges evidence",
+                "brief facts of the case incident FIR complaint investigation findings",
+            ])
 
         if any(term in q_lower for term in ("contradict", "discrepan", "inconsisten", "conflict", "witness", "statement")):
             sub_queries.extend([

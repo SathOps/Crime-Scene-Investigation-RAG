@@ -459,16 +459,9 @@ class LLMService:
         if not is_contradiction_q:
             return answer
 
-        chunks_text = " ".join(c.text for c in chunks).lower()
-        has_ankit = "ankit" in chunks_text or "security guard" in chunks_text
-        has_priya = "priya" in chunks_text or "senior accountant" in chunks_text
-        has_witness_discrepancy = has_ankit and has_priya and (
-            ("hoodie" in chunks_text and "jacket" in chunks_text) or
-            ("rear" in chunks_text and "front" in chunks_text) or
-            (("21:08" in chunks_text or "21:10" in chunks_text) and "21:15" in chunks_text)
-        )
-
-        if not has_witness_discrepancy:
+        from agent.contradiction_pipeline import ContradictionPipeline
+        contra_res = ContradictionPipeline.analyze_contradictions(chunks, query=query)
+        if not contra_res.contradiction_identified:
             return answer
 
         ans_lower = answer.answer.lower()
@@ -481,26 +474,21 @@ class LLMService:
         ) or not ("yes" in ans_lower[:50] or "contradiction identified: yes" in ans_lower or "contradiction" in ans_lower)
 
         if falsely_claims_no_contradiction:
-            structured_answer = (
-                "Contradiction identified: Yes.\n\n"
-                "- Witness 1 Statement (Security Guard Ankit Sharma): Stated that the accused entered through the rear service gate at ~21:08/21:10 HRS wearing a dark navy blue hooded sweatshirt with the hood pulled over his head, dark jeans, and black sneakers.\n"
-                "- Witness 2 Statement (Senior Accountant Priya Nair): Stated that she saw the accused standing outside the front main entrance at 21:15 HRS wearing a bright red leather jacket and dark blue jeans near a red motorcycle.\n"
-                "- Nature of Discrepancy: Direct factual inconsistencies across entry timing (21:08 vs 21:15 HRS), location of presence (rear service entrance vs front main entrance), and clothing/attire (dark navy blue hoodie vs bright red leather jacket).\n"
-                "- Supporting or Conflicting Evidence: Independent video logs from CCTV Cameras 01 and 02 conclusively corroborated Security Guard Ankit Sharma's timeline and navy blue hoodie description. Video surveillance showed no entry matching the accused in a red jacket at the front entrance.\n"
-                "- Court's Interpretation: In Section 3 of the Court Judgment, the Sessions Court evaluated this contradiction and found Priya Nair's observation was unsupported by video evidence, treating it as an honest error in timing or identity.\n"
-                "- Final Assessment of Materiality: The court held that this minor discrepancy was insufficient to shake or undermine the core prosecution narrative. However, as a matter of factual evidence, a genuine contradiction existed between the witness accounts.\n\n"
-                "CRITICAL LEGAL PRINCIPLE: A judicial resolution or reconciliation of an inconsistency as an 'honest error' does not negate the existence of the underlying factual contradiction between witness statements."
-            )
-            answer.answer = structured_answer
-            answer.key_findings = [
-                "Contradiction identified: Security Guard Ankit Sharma (rear gate, 21:08, navy blue hoodie) and Senior Accountant Priya Nair (front gate, 21:15, red jacket) gave factually contradictory accounts.",
-                "CCTV Cameras 01 and 02 video logs conclusively corroborated Ankit Sharma's account and attire.",
-                "The Sessions Court treated Priya Nair's observation as an honest error in timing or identity, ruling the discrepancy minor and non-fatal to the conviction.",
-                "Judicial resolution of an inconsistency as an honest error does not negate the existence of the underlying factual contradiction between witness statements."
-            ]
+            answer.answer = ContradictionPipeline.format_contradiction_markdown(contra_res)
+            answer.contradiction_comparisons = contra_res.comparisons
+            findings = []
+            for comp in contra_res.comparisons:
+                findings.append(f"Contradiction identified: {comp.witness_a} and {comp.witness_b} gave factually conflicting accounts on {comp.factual_subject}.")
+                if comp.corroborating_evidence:
+                    findings.append(f"Corroborating evidence: {comp.corroborating_evidence[:200]}")
+                if comp.court_resolution:
+                    findings.append(f"Court evaluation: {comp.court_resolution[:200]}")
+            findings.append("Judicial resolution of an inconsistency as an honest error does not negate the existence of the underlying factual contradiction between witness statements.")
+            answer.key_findings = findings
+
             witness_chunks = [
                 c for c in chunks
-                if any(w in (c.document_name + " " + c.text).lower() for w in ("witness", "ankit", "priya", "judgment", "contradiction", "cctv"))
+                if c.chunk_id in contra_res.selected_chunk_ids or any(w in (c.document_name + " " + c.text).lower() for w in ("witness", "statement", "judgment", "contradiction", "cctv"))
             ]
             if witness_chunks:
                 answer.evidence_summary = [

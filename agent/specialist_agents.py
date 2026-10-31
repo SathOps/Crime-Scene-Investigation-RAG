@@ -7,7 +7,8 @@ analysis as a primary source or as formal legal advice.
 from dataclasses import dataclass
 from typing import Any, Dict, List, Sequence, Tuple, Optional, Callable
 
-from models.schemas import IntentType
+from models.schemas import IntentType, DocumentChunk
+from agent.contradiction_pipeline import ContradictionPipeline
 
 
 MAX_EVIDENCE_CHARS = 4500
@@ -275,12 +276,6 @@ class MultiAgentCoordinator:
             # Sanitize specialist analysis if it erroneously denies contradiction despite factual discrepancies
             if analysis_res.status == "completed" and analysis_res.analysis:
                 a_lower = analysis_res.analysis.lower()
-                ctx_lower = (evidence_context or "").lower()
-                has_ankit_priya = (
-                    ("ankit" in ctx_lower or "security guard" in ctx_lower)
-                    and ("priya" in ctx_lower or "senior accountant" in ctx_lower)
-                    and (("hoodie" in ctx_lower and "jacket" in ctx_lower) or ("rear" in ctx_lower and "front" in ctx_lower))
-                )
                 denies_contradiction = any(
                     phrase in a_lower for phrase in (
                         "no contradiction", "not contradictory", "no discrepancy",
@@ -288,16 +283,13 @@ class MultiAgentCoordinator:
                         "statements do not contradict", "did not contradict"
                     )
                 )
-                if has_ankit_priya and denies_contradiction:
-                    analysis_res.analysis = (
-                        "Contradiction Identified: Yes (factual discrepancies exist between witness statements).\n"
-                        "- Witness 1 Statement (Security Guard Ankit Sharma): Stated accused entered rear gate at 21:08/21:10 HRS in navy blue hoodie.\n"
-                        "- Witness 2 Statement (Senior Accountant Priya Nair): Stated accused stood at front entrance at 21:15 HRS in bright red leather jacket.\n"
-                        "- Factual Discrepancies: Timing (21:08 vs 21:15 HRS), Location (rear service gate vs front entrance), and Attire (navy blue hoodie vs red jacket).\n"
-                        "- Physical Corroboration: CCTV Cameras 01 & 02 verified Ankit Sharma's timeline and attire; front camera showed no person in red jacket.\n"
-                        "- Judicial Resolution: Sessions Court (Section 3 of Judgment) treated Priya Nair's statement as an honest error in timing or identity, holding it non-fatal to the conviction.\n"
-                        "- Critical Legal Principle: Judicial resolution of a discrepancy as an honest error does not negate the existence of the factual contradiction between witness statements."
-                    )
+                if denies_contradiction:
+                    # Dynamically verify whether a factual contradiction exists in the evidence
+                    from agent.tools import text_to_document_chunks
+                    ev_chunks = text_to_document_chunks(evidence_context)
+                    contra_res = ContradictionPipeline.analyze_contradictions(ev_chunks)
+                    if contra_res.contradiction_identified:
+                        analysis_res.analysis = ContradictionPipeline.format_contradiction_markdown(contra_res)
 
             results.append(analysis_res)
             if progress_callback is not None:
@@ -317,40 +309,24 @@ class MultiAgentCoordinator:
         """Reconcile conflicting specialist outputs by cross-examining against authoritative source chunks."""
         intent_val = self._intent_value(intent)
         combined_text = " ".join(r.analysis for r in results if r.status == "completed").lower()
-        chunk_text = " ".join(getattr(c, "text", "") for c in chunks).lower()
 
         # Check if contradiction reconciliation is required
         is_contradiction_scope = intent_val in {
             IntentType.WITNESS_ANALYSIS.value,
             IntentType.CONTRADICTION_ANALYSIS.value,
             IntentType.CONTRADICTION_DETECTION.value,
-        } or any(k in combined_text for k in ("contradiction", "discrepancy", "ankit", "priya"))
+        } or any(k in combined_text for k in ("contradiction", "discrepancy"))
 
         if is_contradiction_scope:
-            # Check for conflict: Did any agent incorrectly say "no contradiction"?
-            has_no_contradiction_claim = any(
-                phrase in combined_text for phrase in (
-                    "no contradiction", "not contradictory", "no discrepancy", "no inconsistencies"
-                )
-            )
-            has_factual_discrepancy = (
-                ("ankit" in chunk_text or "security guard" in chunk_text)
-                and ("priya" in chunk_text or "senior accountant" in chunk_text)
-                and (("hoodie" in chunk_text and "jacket" in chunk_text) or ("rear" in chunk_text and "front" in chunk_text))
-            )
-            has_court_resolution = "honest error" in chunk_text or "court examined the contradiction" in chunk_text
-
-            if has_factual_discrepancy:
+            contra_res = ContradictionPipeline.analyze_contradictions(chunks)
+            if contra_res.contradiction_identified:
                 reconciliation_header = (
                     "[Multi-Agent Reconciliation Engine — Authoritative Consensus]\n"
                     "CRITICAL RESOLUTION: A factual contradiction DOES exist between the witness statements. "
-                    "Although the Sessions Court resolved the contradiction by relying on objective CCTV corroboration "
-                    "and treating Senior Accountant Priya Nair's observation as an 'honest error', the legal resolution "
-                    "does not negate the factual discrepancy between the witness statements themselves.\n"
-                    "- Factual Contradiction: Security Guard Ankit Sharma stated accused entered rear gate at 21:08 HRS in a navy blue hoodie; "
-                    "Senior Accountant Priya Nair stated accused stood at front gate at 21:15 HRS in a bright red leather jacket.\n"
-                    "- Corroboration: CCTV Cameras 01 & 02 verified Ankit Sharma's account.\n"
-                    "- Judicial Outcome: Court treated Priya Nair's statement as an honest error insufficient to shake the prosecution."
+                    "Although the court resolved the contradiction by relying on objective CCTV Cameras 01 & 02 video corroboration "
+                    "and treating conflicting observations as an 'honest error', the legal resolution "
+                    "does not negate the factual discrepancy between the witness statements themselves.\n\n"
+                    + ContradictionPipeline.format_contradiction_markdown(contra_res)
                 )
                 base_formatted = self.format_successful_analyses(results)
                 return reconciliation_header + "\n\n" + base_formatted if base_formatted else reconciliation_header

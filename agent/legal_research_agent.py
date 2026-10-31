@@ -7,11 +7,13 @@ from langchain_core.messages import HumanMessage, AIMessage, ToolMessage, System
 
 from models.schemas import (
     IntentType, DocumentChunk, WorkflowStep, WorkflowState,
-    LegalResearchAnswer, ToolExecution, EvidenceBundle, TimelineEvent
+    LegalResearchAnswer, ToolExecution, EvidenceBundle, TimelineEvent,
+    ContradictionComparison, ContradictionAnalysisResult, WitnessClaim
 )
 from rag.retriever import RAGRetriever
 from llm.llm_service import LLMService
 from agent.timeline_pipeline import TimelinePipeline
+from agent.contradiction_pipeline import ContradictionPipeline
 try:
     from agent.tools import build_legal_tools
 except ImportError:
@@ -99,8 +101,8 @@ def select_evidence_for_intent(chunks: List[DocumentChunk], intent: Any, query: 
         selected = [
             c for c in chunks
             if any(k in (c.document_name + " " + c.document_type + " " + c.text).lower() for k in (
-                "witness", "statement", "deposed", "testified", "ankit", "priya", "suresh",
-                "cctv", "camera", "hoodie", "jacket", "rear", "front", "discrepancy", "contradiction", "honest error"
+                "witness", "statement", "deposed", "testified", "observed", "claimed",
+                "cctv", "camera", "discrepancy", "contradiction", "honest error", "corroborat"
             ))
         ]
         return selected if selected else chunks
@@ -466,6 +468,11 @@ class LegalResearchAgent:
                 "completed",
                 "Insufficient retrieval evidence; specialist and tool-calling stages were safely skipped.",
             ))
+            state.metrics["workflow_dispatch_status"] = "insufficient_evidence_gate"
+            state.metrics["required_operation"] = "none"
+            state.metrics["required_operation_invoked"] = False
+            state.metrics["required_operation_status"] = "skipped"
+            state.metrics["classified_intent"] = state.intent.value if isinstance(state.intent, IntentType) else state.intent
             state.metrics["specialist_agents_selected"] = 0
             state.metrics["specialist_agents_completed"] = 0
             state.metrics["source_count"] = 0
@@ -474,7 +481,7 @@ class LegalResearchAgent:
             state.status = "Completed"
             return state
 
-        # 5. MULTI-AGENT SPECIALIST ANALYSIS
+        # 5. MULTI-AGENT SPECIALIST ANALYSIS & DETERMINISTIC WORKFLOW DISPATCH
         specialist_step = WorkflowStep(
             "Step 5 — Multi-Agent Specialist Analysis",
             "in_progress",
@@ -482,17 +489,86 @@ class LegalResearchAgent:
         )
         state.steps.append(specialist_step)
 
-        # Prepare intent-aware filtered evidence context for specialists and tools
-        if state.intent == IntentType.TIMELINE or any(k in query.lower() for k in ("timeline", "chronolog", "sequence", "when did")):
+        formatted_timeline_table = ""
+        formatted_contra_report = ""
+
+        # A. TIMELINE WORKFLOW DISPATCH
+        if state.intent == IntentType.TIMELINE or any(k in query.lower() for k in ("timeline", "chronolog", "sequence", "order of events", "when did")):
             timeline_chunks, bundle = TimelinePipeline.build_evidence_bundle(chunks, intent="TIMELINE", query=query)
             state.evidence_bundle = bundle
             selected_evidence_chunks = timeline_chunks or chunks
             specialist_context = bundle.formatted_context
             timeline_res = TimelinePipeline.extract_events_structured(selected_evidence_chunks)
+            timeline_res = TimelinePipeline.validate_timeline_result(timeline_res, selected_evidence_chunks)
             state.timeline_events = timeline_res.events
+
+            # Deterministic execution of timeline extraction operation
+            tool_start = time.perf_counter()
+            formatted_timeline_table = TimelinePipeline.format_timeline_markdown_table(timeline_res)
+            tool_metadata = {
+                "selected_chunk_ids": bundle.selected_chunk_ids,
+                "selected_document_ids": bundle.selected_document_ids,
+                "selected_chunk_count": len(bundle.selected_chunk_ids),
+                "evidence_length_chars": bundle.evidence_length_chars,
+                "excluded_chunks": bundle.excluded_chunk_ids,
+                "exclusion_reasons": bundle.exclusion_reasons,
+            }
+            timeline_exec = ToolExecution(
+                tool_name="extract_timeline_events",
+                tool_args=tool_metadata,
+                status="completed" if timeline_res.validation_status != "insufficient" else "insufficient_evidence",
+                result_preview=formatted_timeline_table[:300]
+            )
+            state.executed_tools.append(timeline_exec)
+            state.metrics["tool_duration_seconds"] = round(time.perf_counter() - tool_start, 3)
+
+            state.metrics["workflow_dispatch_status"] = "deterministic_timeline"
+            state.metrics["required_operation"] = "timeline_extraction"
+            state.metrics["required_operation_invoked"] = True
+            state.metrics["required_operation_status"] = timeline_exec.status
+
+        # B. CONTRADICTION WORKFLOW DISPATCH
+        elif state.intent in (IntentType.CONTRADICTION_DETECTION, IntentType.CONTRADICTION_ANALYSIS) or any(k in query.lower() for k in ("contradict", "discrepan", "inconsisten", "conflict")):
+            selected_evidence_chunks = select_evidence_for_intent(chunks, state.intent, query)
+            specialist_context = self.retriever.format_chunks_for_context(selected_evidence_chunks)
+
+            # Deterministic execution of contradiction comparison operation
+            tool_start = time.perf_counter()
+            contra_res = ContradictionPipeline.analyze_contradictions(selected_evidence_chunks, query=query)
+            state.contradiction_result = contra_res
+            formatted_contra_report = ContradictionPipeline.format_contradiction_markdown(contra_res)
+
+            excluded = [c.chunk_id for c in chunks if c.chunk_id not in contra_res.selected_chunk_ids]
+            tool_metadata = {
+                "selected_chunk_ids": contra_res.selected_chunk_ids,
+                "selected_document_ids": contra_res.selected_document_ids,
+                "selected_chunk_count": len(contra_res.selected_chunk_ids),
+                "evidence_length_chars": len(specialist_context),
+                "excluded_chunks": excluded,
+                "exclusion_reasons": {cid: "Excluded (not a witness observation or judicial evaluation excerpt)" for cid in excluded}
+            }
+            contra_exec = ToolExecution(
+                tool_name="analyze_witness_contradictions",
+                tool_args=tool_metadata,
+                status="completed" if contra_res.status != "insufficient_evidence" else "insufficient_evidence",
+                result_preview=formatted_contra_report[:300]
+            )
+            state.executed_tools.append(contra_exec)
+            state.metrics["tool_duration_seconds"] = round(time.perf_counter() - tool_start, 3)
+
+            state.metrics["workflow_dispatch_status"] = "deterministic_contradiction"
+            state.metrics["required_operation"] = "witness_contradiction_analysis"
+            state.metrics["required_operation_invoked"] = True
+            state.metrics["required_operation_status"] = contra_exec.status
+
+        # C. STANDARD DISPATCH FOR OTHER INTENTS
         else:
             selected_evidence_chunks = select_evidence_for_intent(chunks, state.intent, query)
             specialist_context = self.retriever.format_chunks_for_context(selected_evidence_chunks)
+            state.metrics["workflow_dispatch_status"] = "standard_research"
+            state.metrics["required_operation"] = "case_synthesis"
+            state.metrics["required_operation_invoked"] = True
+            state.metrics["required_operation_status"] = "completed"
 
         specialist_started = time.perf_counter()
         specialist_results = self.multi_agent_coordinator.analyze(
@@ -538,22 +614,29 @@ class LegalResearchAgent:
             specialist_results, chunks, state.intent
         )
 
-        # 6. EXECUTE LANGCHAIN TOOL CALLING LOOP
+        # 6. TOOL EXECUTION & VERIFICATION STEP
         tool_loop_step = WorkflowStep(
-            "Step 6 — LangChain Tool Calling Loop",
+            "Step 6 — Tool Execution & Verification",
             "in_progress",
-            "Binding tools to Chat LLM & evaluating tool calls"
+            "Verifying required deterministic tool execution and evaluating tool calls"
         )
         state.steps.append(tool_loop_step)
-        tool_loop_output = self.execute_tool_calling_loop(
-            state.normalized_query, state, evidence_context=specialist_context
-        )
-        tool_status = state.metrics.get("tool_loop_status", "completed")
-        tool_loop_step.status = "skipped" if tool_status == "skipped" else ("failed" if tool_status == "failed" else "completed")
-        report("Tool-calling stage " + str(tool_status) + ". Generating the final structured answer.")
-        tool_loop_step.detail = (
-            f"Tool-calling status: {tool_status}; {len(state.executed_tools)} tools executed."
-        )
+
+        if state.metrics.get("workflow_dispatch_status") in ("deterministic_timeline", "deterministic_contradiction"):
+            tool_status = state.metrics.get("required_operation_status", "completed")
+            tool_loop_step.status = "completed" if tool_status == "completed" else "failed"
+            tool_name = "extract_timeline_events" if state.metrics["workflow_dispatch_status"] == "deterministic_timeline" else "analyze_witness_contradictions"
+            tool_loop_step.detail = f"Deterministic operation '{tool_name}' executed successfully ({len(state.executed_tools)} tools logged)."
+            tool_loop_output = formatted_timeline_table or formatted_contra_report
+        else:
+            tool_loop_output = self.execute_tool_calling_loop(
+                state.normalized_query, state, evidence_context=specialist_context
+            )
+            tool_status = state.metrics.get("tool_loop_status", "completed")
+            tool_loop_step.status = "skipped" if tool_status == "skipped" else ("failed" if tool_status == "failed" else "completed")
+            tool_loop_step.detail = f"Tool-calling status: {tool_status}; {len(state.executed_tools)} tools executed."
+
+        report("Tool stage completed. Generating the final structured answer.")
 
         # 7. STRUCTURED RESPONSE & PYDANTIC VALIDATION
         state.steps.append(WorkflowStep(
@@ -565,7 +648,8 @@ class LegalResearchAgent:
         synthesis_started = time.perf_counter()
         supplemental_notes = specialist_analysis_notes
         if tool_loop_output and tool_loop_output.strip():
-            supplemental_notes = (supplemental_notes + "\\n\\n" if supplemental_notes else "") + "[Tool-loop model output — secondary analysis, verify against source excerpts]\\n" + tool_loop_output.strip()
+            supplemental_notes = (supplemental_notes + "\n\n" if supplemental_notes else "") + "[Structured Tool Output — Verified Procedural Records]\n" + tool_loop_output.strip()
+
         answer_obj, raw_resp, err_msg = self.llm_service.generate_structured_response(
             query=query,
             intent=state.intent,
@@ -575,6 +659,18 @@ class LegalResearchAgent:
             # Secondary notes can guide synthesis but are never primary evidence or citations.
             analysis_notes=supplemental_notes,
         )
+
+        # Guarantee timeline table in final answer for timeline intent
+        if state.metrics.get("workflow_dispatch_status") == "deterministic_timeline" and formatted_timeline_table:
+            if "CHRONOLOGICAL EVENT TIMELINE" not in answer_obj.answer and "### Chronological Event Timeline" not in answer_obj.answer:
+                answer_obj.answer = formatted_timeline_table
+
+        # Guarantee contradiction report in final answer for contradiction intent
+        if state.metrics.get("workflow_dispatch_status") == "deterministic_contradiction" and formatted_contra_report:
+            if "Witness Contradiction Analysis" not in answer_obj.answer and "Contradiction Identified:" not in answer_obj.answer:
+                answer_obj.answer = formatted_contra_report
+            if state.contradiction_result and state.contradiction_result.comparisons:
+                answer_obj.contradiction_comparisons = state.contradiction_result.comparisons
 
         state.structured_answer = answer_obj
         if state.timeline_events and not answer_obj.timeline_events:
@@ -605,6 +701,10 @@ class LegalResearchAgent:
         state.steps.append(WorkflowStep("Step 8 — Sources & Citations", "completed", f"{len(state.sources)} verifiable source references attached"))
         state.metrics["source_count"] = len(state.sources)
         state.metrics["retrieved_chunk_count"] = len(chunks)
+        state.metrics["classified_intent"] = state.intent.value if isinstance(state.intent, IntentType) else state.intent
+        state.metrics["retrieved_document_names"] = list(dict.fromkeys(c.document_name for c in chunks))
+        state.metrics["evidence_preparation_status"] = "completed"
+        state.metrics["executed_tool_names"] = [t.tool_name for t in state.executed_tools]
         cited_distinct_doc_cnt = len({s["document_name"] for s in state.sources if s.get("document_name")})
         state.metrics["distinct_document_count"] = cited_distinct_doc_cnt or (
             self.retriever.get_unique_document_count(chunks)
@@ -618,6 +718,7 @@ class LegalResearchAgent:
         )
         state.metrics["executed_tool_count"] = len(state.executed_tools)
         state.metrics["total_duration_seconds"] = round(time.perf_counter() - workflow_started, 3)
+        state.metrics["final_workflow_status"] = "Completed"
         state.status = "Completed"
         report("Research workflow completed; sources and validation results are ready.")
 

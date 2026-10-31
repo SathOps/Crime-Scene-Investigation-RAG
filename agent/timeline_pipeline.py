@@ -104,32 +104,68 @@ def classify_event_type(snippet: str, source_type: str = "") -> Tuple[str, str]:
 
 
 def extract_actors_from_snippet(snippet: str) -> List[str]:
-    """Extract actors mentioned in an event snippet."""
-    candidate_actors = [
-        "Ramesh Kumar", "Vikram Malhotra", "Ankit Sharma", "Priya Nair",
-        "Suresh Verma", "Sessions Judge M. V. Kulkarni", "Dr. Manisha Kulkarni",
-        "Inspector Rajesh Deshmukh", "Constable Patil", "Blue Dart Cafe Manager"
-    ]
-    actors_found = []
-    for actor in candidate_actors:
-        # Match surname or full name
-        surname = actor.split()[-1]
-        first = actor.split()[0]
-        if actor in snippet or f"Mr. {surname}" in snippet or f"Ms. {surname}" in snippet or f"Dr. {surname}" in snippet or f"Accused {first}" in snippet:
-            if actor not in actors_found:
-                actors_found.append(actor)
+    """Extract actors mentioned in an event snippet case-agnostically."""
+    actors_found: List[str] = []
+
+    # 1. Title/Prefix + Proper Names (e.g. Mr. Malhotra, Inspector Patil, Dr. Kulkarni, Judge Sharma)
+    title_matches = re.findall(
+        r'\b(Mr\.|Ms\.|Mrs\.|Dr\.|Inspector|Insp\.|Constable|Judge|Justice|Officer|Guard)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)\b',
+        snippet
+    )
+    for title, name in title_matches:
+        full_actor = f"{title} {name}".strip()
+        if full_actor not in actors_found:
+            actors_found.append(full_actor)
+
+    # 2. Procedural & Legal Roles (e.g. Accused, Victim, Eye Witness, Security Guard, Senior Accountant)
+    role_pattern = re.compile(
+        r'\b(Security Guard(?:\s+[A-Z][a-z]+)?|Senior Accountant(?:\s+[A-Z][a-z]+)?|'
+        r'The Accused(?:\s+[A-Z][a-z]+)?|Accused(?:\s+[A-Z][a-z]+)?|'
+        r'The Victim(?:\s+[A-Z][a-z]+)?|Victim(?:\s+[A-Z][a-z]+)?|'
+        r'Investigating Officer|Eye Witness|PW-\d+|DW-\d+)\b',
+        re.I
+    )
+    for m in role_pattern.finditer(snippet):
+        role_actor = m.group(1).strip()
+        if not any(role_actor.lower() in a.lower() for a in actors_found):
+            actors_found.append(role_actor)
+
+    # 3. Two capitalized words resembling person names (e.g., "Ramesh Kumar", "Vikram Malhotra", "Priya Nair")
+    name_matches = re.findall(r'\b([A-Z][a-z]+)\s+([A-Z][a-z]+)\b', snippet)
+    stop_names = {
+        "Camera", "Sessions", "Court", "Time", "Death", "Postmortem", "Report", "Analysis", "Judgment",
+        "Section", "Police", "Station", "November", "January", "December", "October", "Evidence", "Case",
+        "Emergency", "Service", "Front", "Rear", "Blue", "Navy", "Red", "Black", "Office", "Main", "Autopsy"
+    }
+    for first, last in name_matches:
+        if first not in stop_names and last not in stop_names:
+            pair = f"{first} {last}"
+            if not any(pair in a for a in actors_found):
+                actors_found.append(pair)
 
     # Generic actor fallback
     s_lower = snippet.lower()
     if not actors_found:
         if "accused" in s_lower:
-            actors_found.append("Accused (Ramesh Kumar)")
+            actors_found.append("Accused")
         if "victim" in s_lower:
-            actors_found.append("Victim (Vikram Malhotra)")
+            actors_found.append("Victim")
         if "guard" in s_lower or "security" in s_lower:
-            actors_found.append("Security Guard (Ankit Sharma)")
+            actors_found.append("Security Guard")
 
     return actors_found
+
+
+def extract_location_from_snippet(snippet: str) -> Optional[str]:
+    """Extract location mentions from event snippet."""
+    loc_match = re.search(
+        r'\b(rear service gate|front main entrance|rear gate|front gate|service gate|emergency stairwell|stairwell door|office\s*#?\d+|lobby|cafe|corridor|entrance|exit|parking|cell tower|room|chamber|gate)\b',
+        snippet,
+        re.I
+    )
+    if loc_match:
+        return loc_match.group(1).strip()
+    return None
 
 
 def normalize_event_chronology(
@@ -139,7 +175,7 @@ def normalize_event_chronology(
 ) -> Tuple[Optional[str], Optional[str], Optional[str], Optional[str], Tuple[int, int, int, int, int, int]]:
     """Normalize date, time, start_time, end_time, and return a comparable sort tuple."""
     # Month, Day, Year extraction
-    year, month, day = 2024, 11, 13
+    year, month, day = 9999, 99, 99
     date_str: Optional[str] = None
 
     date_match = re.search(
@@ -159,19 +195,18 @@ def normalize_event_chronology(
         m_name = date_match.group(2).lower()
         month = MONTH_MAP.get(m_name, 11)
         year = int(date_match.group(3))
-        # Canonical date string
         month_names_full = {
             1: "January", 2: "February", 3: "March", 4: "April", 5: "May", 6: "June",
             7: "July", 8: "August", 9: "September", 10: "October", 11: "November", 12: "December"
         }
-        date_str = f"{day} {month_names_full.get(month, 'November')} {year}"
+        date_str = f"{day} {month_names_full.get(month, m_name.capitalize())} {year}"
     else:
         iso_match = re.search(r'(\d{4})-(\d{2})-(\d{2})', snippet) or re.search(r'(\d{4})-(\d{2})-(\d{2})', chunk_context)
         if iso_match:
             year = int(iso_match.group(1))
             month = int(iso_match.group(2))
             day = int(iso_match.group(3))
-            date_str = f"{day} November {year}"
+            date_str = f"{day} {month} {year}"
 
     # Time / Range extraction
     hour, minute, second = 0, 0, 0
@@ -179,6 +214,10 @@ def normalize_event_chronology(
     start_time_str: Optional[str] = None
     end_time_str: Optional[str] = None
     is_range = 0
+
+    # Check for approximate markers e.g. "around 8 PM", "at about 20:30 HRS"
+    approx_match = re.search(r'\b(around|about|approx\.?|approximately)\s+(\d{1,2}(?::\d{2})?\s*(?:HRS|AM|PM)?)', snippet, re.I)
+    approx_prefix = f"{approx_match.group(1).lower()} " if approx_match else ""
 
     range_match = re.search(r'(\d{1,2}:\d{2})\s*(?:HRS|AM|PM)?\s*(?:to|-|–|and)\s*(\d{1,2}:\d{2})\s*(?:HRS|AM|PM)?', stamp, re.I)
     if not range_match:
@@ -204,7 +243,8 @@ def normalize_event_chronology(
             second = int(sec_val) if sec_val else 0
             if single_time_match.group(4) and single_time_match.group(4).upper() == "PM" and hour < 12:
                 hour += 12
-            time_str = f"{hour:02d}:{minute:02d}" + (f":{second:02d}" if second else "") + " HRS"
+            raw_time = f"{hour:02d}:{minute:02d}" + (f":{second:02d}" if second else "") + " HRS"
+            time_str = f"{approx_prefix}{raw_time}".strip() if approx_prefix and "around" not in raw_time else raw_time
 
     sort_tuple = (year, month, day, hour, minute, is_range)
     return date_str, time_str, start_time_str, end_time_str, sort_tuple
@@ -351,15 +391,18 @@ class TimelinePipeline:
                     continue
                 seen_event_signatures.add(sig)
 
+                location = extract_location_from_snippet(snippet)
+
                 candidate_dict = {
                     "sig": sig,
                     "sort_key": sort_key,
-                    "date": date_val or "13 November 2024",
+                    "date": date_val,
                     "time": time_val or stamp,
                     "start_time": start_t,
                     "end_time": end_t,
                     "event_description": snippet,
                     "actors": actors,
+                    "location": location,
                     "event_type": event_type,
                     "source_type": chunk.document_type or "Case File",
                     "source_chunk_ids": [chunk.chunk_id],
@@ -420,12 +463,14 @@ class TimelinePipeline:
                 end_time=item["end_time"],
                 event_description=item["event_description"],
                 actors=item["actors"],
+                location=item.get("location"),
                 event_type=item["event_type"],
                 source_type=item["source_type"],
                 source_chunk_ids=item["source_chunk_ids"],
                 source_document_ids=item["source_document_ids"],
                 supporting_quote=item["supporting_quote"],
                 certainty=item["certainty"],
+                confidence="High"
             )
             events_list.append(evt)
 

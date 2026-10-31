@@ -51,6 +51,10 @@ from rag.retriever import RAGRetriever
 from rag.evaluation import evaluate_retrieval, benchmark_retrieval, DEFAULT_LEGAL_EVALUATION_CASES
 from rag.benchmark import compare_llm_only_vs_rag
 from llm.llm_service import LLMService
+import agent.timeline_pipeline
+importlib.reload(agent.timeline_pipeline)
+import agent.contradiction_pipeline
+importlib.reload(agent.contradiction_pipeline)
 import agent.tools
 importlib.reload(agent.tools)
 import agent.specialist_agents
@@ -1757,15 +1761,29 @@ with tab_research:
 
             with col_diag2:
                 st.markdown('<div class="section-label-blue">Pipeline Execution Status</div>', unsafe_allow_html=True)
+                metrics = getattr(state, 'metrics', {}) or {}
+                st.markdown(f"**Workflow Dispatch:** `{metrics.get('workflow_dispatch_status', 'standard_research')}`")
+                req_op = metrics.get('required_operation', 'None')
+                req_inv = "Yes (Completed)" if metrics.get('required_operation_invoked') else "No"
+                st.markdown(f"**Required Operation:** `{req_op}` (Invoked: `{req_inv}`)")
                 st.markdown(f"**Retrieval Match:** `{strength}`")
-                st.caption("This rating reflects how closely retrieved passages match the query; it is not a measure of legal proof strength or the court's confidence.")
-                st.markdown(f"**Chunks Retrieved:** `{len(state.retrieved_chunks)} passages`")
-                st.markdown(f"**Tools Invoked:** `{len(state.executed_tools)} tools`")
+                distinct_docs = metrics.get('distinct_document_count', len(set(c.document_name for c in state.retrieved_chunks)))
+                st.markdown(f"**Chunks Retrieved:** `{len(state.retrieved_chunks)} passages` ({distinct_docs} distinct documents)")
+                executed_tools_str = ', '.join(t.tool_name for t in state.executed_tools) if state.executed_tools else 'None'
+                st.markdown(f"**Tools Invoked:** `{len(state.executed_tools)} tools` ({executed_tools_str})")
+                
+                # Per-stage execution timings
+                ret_t = metrics.get('retrieval_duration_seconds', 0)
+                spec_t = metrics.get('specialist_duration_seconds', 0)
+                tool_t = metrics.get('tool_duration_seconds', 0)
+                syn_t = metrics.get('synthesis_duration_seconds', 0)
+                tot_t = metrics.get('total_duration_seconds', 0)
+                st.caption(f"Stage Timings — Retrieval: {ret_t:.2f}s | Specialist: {spec_t:.2f}s | Tools: {tool_t:.2f}s | Synthesis: {syn_t:.2f}s | Total: {tot_t:.2f}s")
                 
                 if getattr(state, 'validation_error', None):
                     st.error(f"Validation Failure: {state.validation_error}")
                 else:
-                    st.success("Pydantic LegalResearchAnswer Validation: PASSED")
+                    st.success(f"Pipeline Status: {state.status.upper()} (Pydantic Validation: PASSED)")
 
             if state.retrieved_chunks:
                 st.html('<div class="section-label" style="margin-top:14px;">Retrieved Chunks & Relevance Scores</div>')
