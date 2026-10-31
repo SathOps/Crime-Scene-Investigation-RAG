@@ -5,12 +5,12 @@ They do not retrieve documents independently and must not treat model-generated
 analysis as a primary source or as formal legal advice.
 """
 from dataclasses import dataclass
-from typing import Any, Dict, List, Sequence, Tuple
+from typing import Any, Dict, List, Sequence, Tuple, Optional, Callable
 
 from models.schemas import IntentType
 
 
-MAX_EVIDENCE_CHARS = 18000
+MAX_EVIDENCE_CHARS = 4500
 
 
 @dataclass
@@ -208,8 +208,9 @@ class MultiAgentCoordinator:
         query: str,
         intent: Any,
         evidence_context: str,
+        progress_callback: Optional[Callable[[str], None]] = None,
     ) -> List[AgentAnalysis]:
-        """Run the selected specialists sequentially and retain individual statuses."""
+        """Run the selected specialists sequentially with live progress reporting."""
         intent_value = self._intent_value(intent)
         selected_agents = self.select_agents(intent_value)
 
@@ -226,8 +227,20 @@ class MultiAgentCoordinator:
             ]
 
         results: List[AgentAnalysis] = []
-        for agent in selected_agents:
-            results.append(agent.run(query, intent_value, evidence_context))
+        for idx, agent in enumerate(selected_agents, 1):
+            if progress_callback is not None:
+                try:
+                    progress_callback(f"Specialist [{idx}/{len(selected_agents)}] {agent.agent_name} analyzing evidence...")
+                except Exception:
+                    pass
+            analysis_res = agent.run(query, intent_value, evidence_context)
+            results.append(analysis_res)
+            if progress_callback is not None:
+                try:
+                    status_lbl = "completed" if analysis_res.status == "completed" else "skipped/failed"
+                    progress_callback(f"Specialist [{idx}/{len(selected_agents)}] {agent.agent_name} {status_lbl}.")
+                except Exception:
+                    pass
         return results
 
     def reconcile_analyses(

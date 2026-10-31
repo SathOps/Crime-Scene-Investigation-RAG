@@ -26,7 +26,9 @@ class LLMService:
             return ChatOllama(
                 model=self.model_name,
                 base_url=self.base_url,
-                temperature=0.1
+                temperature=0.1,
+                timeout=45,
+                keep_alive="10m",
             )
         elif self.provider == "openai" and self.api_key:
             from langchain_openai import ChatOpenAI
@@ -128,7 +130,9 @@ class LLMService:
                     model=self.model_name,
                     base_url=self.base_url,
                     temperature=0.1,
-                    format="json"
+                    format="json",
+                    timeout=60,
+                    keep_alive="10m",
                 )
                 
                 chain = LEGAL_RESEARCH_PROMPT_TEMPLATE | llm
@@ -650,6 +654,7 @@ class LLMService:
                 temperature=temperature,
                 timeout=45,
                 num_predict=192,
+                keep_alive="10m",
             )
             response = model.invoke([
                 SystemMessage(content=system_prompt),
