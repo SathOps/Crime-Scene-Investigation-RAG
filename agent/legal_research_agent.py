@@ -510,7 +510,10 @@ class LegalResearchAgent:
         state.steps.append(WorkflowStep("Step 8 — Sources & Citations", "completed", f"{len(state.sources)} verifiable source references attached"))
         state.metrics["source_count"] = len(state.sources)
         state.metrics["retrieved_chunk_count"] = len(chunks)
-        state.metrics["distinct_document_count"] = self.retriever.get_unique_document_count(chunks)
+        if hasattr(self.retriever, "get_unique_document_count"):
+            state.metrics["distinct_document_count"] = self.retriever.get_unique_document_count(chunks)
+        else:
+            state.metrics["distinct_document_count"] = len({c.document_name for c in chunks if getattr(c, "document_name", None)})
         state.metrics["executed_tool_count"] = len(state.executed_tools)
         state.metrics["total_duration_seconds"] = round(time.perf_counter() - workflow_started, 3)
         state.status = "Completed"

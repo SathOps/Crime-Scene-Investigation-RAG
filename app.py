@@ -45,6 +45,8 @@ import rag.embeddings
 importlib.reload(rag.embeddings)
 from rag.embeddings import EmbeddingService
 from rag.vector_store import VectorStoreManager
+import rag.retriever
+importlib.reload(rag.retriever)
 from rag.retriever import RAGRetriever
 from rag.evaluation import evaluate_retrieval, benchmark_retrieval, DEFAULT_LEGAL_EVALUATION_CASES
 from rag.benchmark import compare_llm_only_vs_rag
