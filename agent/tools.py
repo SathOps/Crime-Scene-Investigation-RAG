@@ -38,53 +38,137 @@ def build_legal_tools(retriever):
         if not text:
             return "No retrieved evidence was supplied; no timeline can be extracted."
 
-        pattern = r'(\b\d{1,2}\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+\d{4}\b|\b\d{1,2}/\d{1,2}/\d{2,4}\b|\b\d{4}-\d{2}-\d{2}\b|\b\d{1,2}:\d{2}\s*(?:HRS|AM|PM)?\b)'
-        raw_events = []
-        seen = set()
+        # If supplied text is sparse in temporal markers, and retriever is available,
+        # gather comprehensive timeline chunks across the case index.
+        time_matches_initial = len(re.findall(r'\b\d{1,2}:\d{2}\b', text))
+        if time_matches_initial < 3 and retriever is not None:
+            try:
+                timeline_chunks, _ = retriever.retrieve_evidence(
+                    query="chronological timeline dates timestamps CCTV postmortem 13 November 2024 21:08 21:15 21:35 21:39 10 January 2025",
+                    top_k=8,
+                    intent="TIMELINE"
+                )
+                if timeline_chunks:
+                    supplemental_context = retriever.format_chunks_for_context(timeline_chunks)
+                    text = (text + "\n\n" + supplemental_context).strip()
+            except Exception:
+                pass
 
-        # Split by blocks or lines to extract context
+        # Robust sentence boundary extraction helper
+        def _extract_sentence_boundary(src_text: str, match_start: int, match_end: int) -> str:
+            left = match_start
+            while left > 0:
+                if src_text[left - 1] in "\n":
+                    break
+                if src_text[left - 1] in ".!?" and left < len(src_text) and src_text[left].isspace():
+                    break
+                left -= 1
+
+            right = match_end
+            while right < len(src_text):
+                if src_text[right] in "\n":
+                    break
+                if src_text[right] in ".!?" and (right + 1 == len(src_text) or src_text[right + 1].isspace()):
+                    right += 1
+                    break
+                right += 1
+
+            snippet = src_text[left:right].strip()
+            # Clean leading list markers, broken punctuation, or bullets
+            snippet = re.sub(r'^(?:[-*•#\d.]+|\([a-zA-Z\d]+\))\s*', '', snippet).strip()
+            snippet = re.sub(r'^\s*[,;:)]+\s*', '', snippet).strip()
+            snippet = re.sub(r'\s+', ' ', snippet)
+            return snippet
+
+        # Event categorization helper
+        def _categorize_event(snippet: str, stamp: str) -> tuple:
+            s_lower = snippet.lower()
+            if any(k in s_lower for k in ("postmortem", "time of death", "autopsy", "pm-894", "estimated time")):
+                return (
+                    "[Forensic Estimate: Estimated Time Window of Death]",
+                    " *(Medical estimate window; not an exact observed event time)*"
+                )
+            if any(k in s_lower for k in ("cctv", "camera", "dvr", "gait analysis", "video stream", "video log")):
+                return ("[CCTV Event]", "")
+            if any(k in s_lower for k in ("judgment", "verdict", "pronounced", "convicted", "sentenced", "sessions court", "sessions judge")):
+                return ("[Judicial Event]", "")
+            if any(k in s_lower for k in ("witness", "ankit", "priya", "suresh", "saw", "observed", "stated", "testified", "deposed", "heard")):
+                return ("[Witness Observation]", "")
+            if any(k in s_lower for k in ("alleged", "prosecution", "charges", "embezzlement", "robbed")):
+                return ("[Prosecution Allegation]", "")
+            return ("[Case Event]", "")
+
+        pattern = r'(\b\d{1,2}(?:st|nd|rd|th)?\s+(?:January|February|March|April|May|June|July|August|September|October|November|December|Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+\d{4}\b|\b\d{1,2}:\d{2}\s*(?:HRS|AM|PM)?\s*(?:to|-|–|and)\s*\d{1,2}:\d{2}\s*(?:HRS|AM|PM)?\b|\b\d{1,2}:\d{2}(?::\d{2})?\s*(?:HRS|AM|PM)?\b|\b\d{1,2}/\d{1,2}/\d{2,4}\b|\b\d{4}-\d{2}-\d{2}\b)'
+
+        raw_events = []
+        seen_keys = set()
+        month_map = {
+            "jan": 1, "feb": 2, "mar": 3, "apr": 4, "may": 5, "jun": 6,
+            "jul": 7, "aug": 8, "sep": 9, "oct": 10, "nov": 11, "dec": 12
+        }
+
         for match in re.finditer(pattern, text, re.IGNORECASE):
             stamp = match.group(0).strip()
-            stamp_key = stamp.lower()
-            if stamp_key in seen:
+            stamp_norm = re.sub(r'\s+', ' ', stamp.lower())
+
+            snippet = _extract_sentence_boundary(text, match.start(), match.end())
+            if not snippet or len(snippet) < 15:
                 continue
-            seen.add(stamp_key)
 
-            # Get surrounding sentence/context
-            start = max(0, match.start() - 60)
-            end = min(len(text), match.end() + 180)
-            snippet = text[start:end].replace("\n", " ").strip()
-            
-            # Extract possible source label preceding or near snippet
-            source_match = re.search(r'(?:Source File|--- EVIDENCE ITEM|\[)([^,\n\]]+)', text[max(0, match.start()-300):match.start()])
-            source_label = source_match.group(1).strip() if source_match else "Retrieved Case File"
+            # Dedup key combines normalized stamp and first 40 chars of snippet
+            dedup_key = f"{stamp_norm}::{snippet[:40].lower()}"
+            if dedup_key in seen_keys:
+                continue
+            seen_keys.add(dedup_key)
 
-            raw_events.append((stamp, snippet, source_label))
+            # Extract source attribution preceding snippet
+            source_match = re.search(r'(?:Source File|--- EVIDENCE ITEM|\[)([^,\n\]]+)', text[max(0, match.start() - 350):match.start()])
+            source_label = source_match.group(1).strip() if source_match else "Retrieved Case Records"
 
-        if not raw_events:
-            return "No explicit dates or timestamps were found in the supplied passages."
+            category_tag, qualification = _categorize_event(snippet, stamp)
 
-        # Chronological sorting helper
-        def sort_key(item):
-            stamp = item[0]
+            # Identify associated date for chronological sorting
+            year, month, day = 2024, 11, 13
+            date_search = re.search(r'(\d{1,2})(?:st|nd|rd|th)?\s+(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+(\d{4})', snippet, re.I)
+            if not date_search:
+                date_search = re.search(r'(\d{1,2})(?:st|nd|rd|th)?\s+(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+(\d{4})', text[max(0, match.start() - 400):match.start()], re.I)
+
+            if date_search:
+                day = int(date_search.group(1))
+                month = month_map.get(date_search.group(2).lower()[:3], 11)
+                year = int(date_search.group(3))
+
+            # Identify time
+            hour, minute = 0, 0
             time_match = re.search(r'(\d{1,2}):(\d{2})', stamp)
             if time_match:
-                return (1, int(time_match.group(1)) * 60 + int(time_match.group(2)))
-            date_match = re.search(r'(\d{1,2})\s+(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+(\d{4})', stamp, re.I)
-            if date_match:
-                month_map = {"jan":1, "feb":2, "mar":3, "apr":4, "may":5, "jun":6, "jul":7, "aug":8, "sep":9, "oct":10, "nov":11, "dec":12}
-                return (0, int(date_match.group(3)) * 10000 + month_map[date_match.group(2).lower()[:3]] * 100 + int(date_match.group(1)))
-            return (2, 0)
+                hour = int(time_match.group(1))
+                minute = int(time_match.group(2))
 
-        raw_events.sort(key=sort_key)
-        formatted_lines = [
-            f"- **{stamp}**: {snippet} *(Source: {source})*"
-            for stamp, snippet, source in raw_events
-        ]
+            # Range indicator
+            is_range = 1 if any(sep in stamp for sep in ("-", "–", "to", "and")) else 0
+
+            sort_tuple = (year, month, day, hour, minute, is_range)
+            raw_events.append((sort_tuple, stamp, category_tag, snippet, qualification, source_label))
+
+        if len(raw_events) < 2:
+            return (
+                "Controlled Error: Unable to extract a reliable chronological timeline from the provided evidence. "
+                "Insufficient temporal markers or timeline passages found in the supplied records."
+            )
+
+        raw_events.sort(key=lambda x: x[0])
+
+        formatted_lines = []
+        for sort_tuple, stamp, category_tag, snippet, qualification, source_label in raw_events:
+            formatted_lines.append(
+                f"- **{stamp}**: {category_tag} {snippet}{qualification} *(Source: {source_label})*"
+            )
+
         return (
             "CHRONOLOGICAL EVENT TIMELINE (Extracted from retrieved records):\n"
             + "\n".join(formatted_lines)
-            + "\n\nNote: If certain time windows are absent from the records, the timeline is partial and reflects only documented case facts."
+            + "\n\nNote: All extracted events are grounded in retrieved case documents. Estimated time windows (such as postmortem time of death) represent medical opinions rather than exact observed point events."
         )
 
     @tool

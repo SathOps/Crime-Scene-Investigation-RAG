@@ -1546,6 +1546,11 @@ with tab_research:
         specialist_status = "completed" if specialist_count > 0 else ("skipped" if (strength == "Insufficient" or is_standalone_hypothetical_query(state.query)) else "failed")
         answer_status = "completed" if (ans and state.status == "Completed") else ("failed" if state.status == "Failed" else "skipped")
 
+        unique_cited_docs = len({src['document_name'] for src in state.sources if src.get('document_name')})
+        cited_chunks_cnt = len(state.sources)
+        retrieved_chunk_cnt = int(runtime_metrics.get("retrieved_chunk_count", len(state.retrieved_chunks)))
+        retrieved_doc_cnt = int(runtime_metrics.get("retrieved_distinct_document_count", len({c.document_name for c in state.retrieved_chunks})))
+
         st.html('<div class="section-label-blue">Agent Workflow Pipeline</div>')
         st.html(f"""
         <div class="pipeline-container">
@@ -1564,7 +1569,7 @@ with tab_research:
             <div class="pipeline-node step-3">
                 <div class="pipeline-dot {retrieval_status}"></div>
                 <div class="pipeline-label">Retrieval</div>
-                <div class="pipeline-value">{len(state.sources)} sources</div>
+                <div class="pipeline-value">{unique_cited_docs} doc(s) ({cited_chunks_cnt} cited)</div>
             </div>
             <div class="pipeline-connector conn-3"></div>
             <div class="pipeline-node step-4">
@@ -1589,19 +1594,17 @@ with tab_research:
 
         metric_cols = st.columns(4)
         metric_cols[0].metric("Total runtime", f"{runtime_metrics.get('total_duration_seconds', 0):.2f}s")
-        retrieved_chunk_cnt = int(runtime_metrics.get("retrieved_chunk_count", len(state.retrieved_chunks)))
-        distinct_doc_cnt = int(runtime_metrics.get("distinct_document_count", len({c.document_name for c in state.retrieved_chunks})))
-        metric_cols[1].metric("Retrieved chunks", f"{retrieved_chunk_cnt} ({distinct_doc_cnt} docs)")
+        metric_cols[1].metric("Retrieved chunks", f"{retrieved_chunk_cnt} ({retrieved_doc_cnt} docs)")
         specialist_selected = int(runtime_metrics.get("specialist_agents_selected", 0))
         metric_cols[2].metric("Agents completed", f"{specialist_count}/{specialist_selected}")
-        metric_cols[3].metric("Citations", int(runtime_metrics.get("source_count", len(state.sources))))
+        metric_cols[3].metric("Citations", f"{cited_chunks_cnt} ({unique_cited_docs} docs)")
 
         # Meta pills
         st.html(f"""
         <div class="meta-pills">
             <span class="pill pill-intent">Intent: {html.escape(intent_val.replace('_', ' '))}</span>
             <span class="pill {strength_class}">Evidence: {html.escape(strength)}</span>
-            <span class="pill pill-sources">Sources: {len(state.sources)}</span>
+            <span class="pill pill-sources">Sources: {unique_cited_docs} document(s) ({cited_chunks_cnt} chunks)</span>
         </div>
         """)
 
@@ -1685,7 +1688,7 @@ with tab_research:
             """)
 
         # ─── SOURCES ─────────────────────────
-        with st.expander(f"EVIDENCE SOURCES  [{len(state.sources)} cited; {len(state.retrieved_chunks)} candidates retrieved]"):
+        with st.expander(f"EVIDENCE SOURCES  [{unique_cited_docs} unique document(s), {cited_chunks_cnt} chunk(s) cited; {retrieved_chunk_cnt} retrieved]"):
             if not state.sources:
                 st.html(f"""
                 <div class="empty-state">
@@ -1694,20 +1697,31 @@ with tab_research:
                 </div>
                 """)
             else:
+                docs_to_sources = {}
                 for src in state.sources:
+                    doc = src.get("document_name", "Unknown Document")
+                    docs_to_sources.setdefault(doc, []).append(src)
+
+                for doc_name, doc_sources in docs_to_sources.items():
                     st.html(f"""
-                    <div class="source-card">
-                        <div class="source-top">
-                            <span class="source-id">Source {src['citation_num']:02d}</span>
-                            <span class="source-page">Page {src['page_number']}</span>
-                        </div>
-                        <div class="source-name">{html.escape(src['document_name'])}</div>
-                        <div class="source-excerpt">"{html.escape(src['excerpt'])}"</div>
-                        <div class="source-meta">
-                            <span class="source-meta-item">Chunk #{src['chunk_id']}</span>
-                        </div>
+                    <div style="margin-top:12px; margin-bottom:6px; font-weight:700; font-size:0.88rem; color:var(--blue-glow); display:flex; align-items:center; gap:8px;">
+                        <span>📄 {html.escape(doc_name)}</span>
+                        <span style="font-size:0.75rem; font-weight:400; color:var(--text-muted);">({len(doc_sources)} chunk(s) cited)</span>
                     </div>
                     """)
+                    for src in doc_sources:
+                        st.html(f"""
+                        <div class="source-card">
+                            <div class="source-top">
+                                <span class="source-id">Citation #{src['citation_num']:02d}</span>
+                                <span class="source-page">Page {src['page_number']}</span>
+                            </div>
+                            <div class="source-excerpt">"{html.escape(src['excerpt'])}"</div>
+                            <div class="source-meta">
+                                <span class="source-meta-item">Chunk #{src['chunk_id']}</span>
+                            </div>
+                        </div>
+                        """)
 
         # ─── EXECUTED TOOLS LOG ───────────────
         if getattr(state, "executed_tools", None):

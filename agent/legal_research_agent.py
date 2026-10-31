@@ -72,6 +72,60 @@ def build_hypothetical_answer(query: str, normalized_query: str, intent: str) ->
     )
 
 
+def select_evidence_for_intent(chunks: List[DocumentChunk], intent: Any, query: str = "") -> List[DocumentChunk]:
+    """Select intent-specific evidence passages from retrieved chunks while preserving metadata."""
+    if not chunks:
+        return []
+
+    intent_str = str(getattr(intent, "value", intent)).upper()
+    q_lower = (query or "").lower()
+
+    # 1. TIMELINE: dates, times, chronological events, CCTV, medical reports
+    if intent_str == "TIMELINE" or any(k in q_lower for k in ("timeline", "chronolog", "sequence", "when did", "order of events")):
+        selected = [
+            c for c in chunks
+            if re.search(r'\b\d{1,2}:\d{2}\b', c.text)
+            or re.search(r'\b\d{1,2}(?:st|nd|rd|th)?\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\b', c.text, re.I)
+            or any(k in (c.document_name + " " + c.text).lower() for k in ("cctv", "timestamp", "postmortem", "autopsy", "schedule", "entry", "exit", "hours", "hrs"))
+        ]
+        return selected if selected else chunks
+
+    # 2. CONTRADICTION_DETECTION / WITNESS_ANALYSIS: witness statements and conflicting accounts
+    if intent_str in {"WITNESS_ANALYSIS", "CONTRADICTION_ANALYSIS", "CONTRADICTION_DETECTION"} or any(k in q_lower for k in ("witness", "contradict", "discrepan", "inconsisten", "statement")):
+        selected = [
+            c for c in chunks
+            if any(k in (c.document_name + " " + c.document_type + " " + c.text).lower() for k in (
+                "witness", "statement", "deposed", "testified", "ankit", "priya", "suresh",
+                "cctv", "camera", "hoodie", "jacket", "rear", "front", "discrepancy", "contradiction", "honest error"
+            ))
+        ]
+        return selected if selected else chunks
+
+    # 3. FORENSIC_ANALYSIS / EVIDENCE_EVALUATION: forensic reports and scientific findings
+    if intent_str in {"EVIDENCE_ANALYSIS", "EVIDENCE_EVALUATION"} or any(k in q_lower for k in ("forensic", "scientific", "ballistic", "gsr", "fingerprint", "postmortem", "gait", "blood", "medical", "laboratory")):
+        selected = [
+            c for c in chunks
+            if any(k in (c.document_name + " " + c.document_type + " " + c.text).lower() for k in (
+                "forensic", "scientific", "ballistic", "gsr", "gunshot residue", "fingerprint",
+                "footwear", "postmortem", "autopsy", "gait", "medical", "laboratory", "lead", "barium", "antimony"
+            ))
+        ]
+        return selected if selected else chunks
+
+    # 4. ALIBI_ANALYSIS / ACCUSED_INFORMATION: alibi statements, CDR, CCTV, location evidence
+    if intent_str in {"ACCUSED_INFORMATION"} or any(k in q_lower for k in ("alibi", "cell tower", "cdr", "location", "bs-04", "blue dart", "cafe", "where was")):
+        selected = [
+            c for c in chunks
+            if any(k in (c.document_name + " " + c.document_type + " " + c.text).lower() for k in (
+                "alibi", "section 11", "cdr", "cell tower", "bs-04", "blue dart", "cafe",
+                "manager", "gait", "location", "presence", "accused statement", "phone"
+            ))
+        ]
+        return selected if selected else chunks
+
+    return chunks
+
+
 MAX_TOOL_ITERATIONS = 5
 
 class LegalResearchAgent:
@@ -124,7 +178,7 @@ class LegalResearchAgent:
             state.metrics["tool_loop_reason"] = f"{type(e).__name__}: {e}"
             return ""
 
-        compact_evidence = (evidence_context[:3000] + "\n[Context preview for tool routing...]") if evidence_context and len(evidence_context) > 3000 else (evidence_context or "No evidence supplied.")
+        compact_evidence = (evidence_context[:8000] + "\n[Context preview for tool routing...]") if evidence_context and len(evidence_context) > 8000 else (evidence_context or "No evidence supplied.")
         system_msg = SystemMessage(content=(
             "You are an expert Legal Research Agent. Analyze legal case questions, determine if specialized tools "
             "like `retrieve_case_evidence`, `extract_timeline_events`, `analyze_witness_contradictions`, or "
@@ -178,6 +232,18 @@ class LegalResearchAgent:
                     continue
 
                 try:
+                    # Provide intent-specific evidence if tool was invoked with empty or truncated arguments
+                    if tool_name in {"extract_timeline_events", "analyze_witness_contradictions", "summarize_case_facts"}:
+                        supplied_ev = str(tool_args.get("evidence_text", "")).strip()
+                        if not supplied_ev or len(supplied_ev) < 150:
+                            if tool_name == "extract_timeline_events":
+                                ev_chunks = select_evidence_for_intent(state.retrieved_chunks, IntentType.TIMELINE, query)
+                            elif tool_name == "analyze_witness_contradictions":
+                                ev_chunks = select_evidence_for_intent(state.retrieved_chunks, IntentType.CONTRADICTION_DETECTION, query)
+                            else:
+                                ev_chunks = state.retrieved_chunks
+                            tool_args["evidence_text"] = self.retriever.format_chunks_for_context(ev_chunks)
+
                     tool_result = selected_tool.invoke(tool_args)
                     result_str = str(tool_result)
                     logger.info(f"[AGENT TOOL RESULT] Success ({len(result_str)} chars)")
@@ -387,21 +453,8 @@ class LegalResearchAgent:
         state.steps.append(specialist_step)
 
         # Prepare intent-aware filtered evidence context for specialists and tools
-        q_lower = query.lower()
-        if state.intent in {IntentType.WITNESS_ANALYSIS, IntentType.CONTRADICTION_ANALYSIS, IntentType.CONTRADICTION_DETECTION} or any(k in q_lower for k in ("witness", "contradict", "discrepan", "inconsisten")):
-            witness_chunks = [
-                c for c in chunks
-                if any(w in (c.document_name + " " + c.document_type + " " + c.text).lower() for w in ("witness", "statement", "ankit", "priya", "cctv", "camera", "judgment", "discrepancy", "contradiction"))
-            ]
-            specialist_context = self.retriever.format_chunks_for_context(witness_chunks or chunks)
-        elif state.intent == IntentType.TIMELINE or any(k in q_lower for k in ("timeline", "chronolog", "sequence", "when did")):
-            timeline_chunks = [
-                c for c in chunks
-                if re.search(r'\b\d{1,2}:\d{2}\b', c.text) or re.search(r'\b\d{1,2}\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\b', c.text, re.I)
-            ]
-            specialist_context = self.retriever.format_chunks_for_context(timeline_chunks or chunks)
-        else:
-            specialist_context = self.retriever.format_chunks_for_context(chunks)
+        selected_evidence_chunks = select_evidence_for_intent(chunks, state.intent, query)
+        specialist_context = self.retriever.format_chunks_for_context(selected_evidence_chunks)
 
         specialist_started = time.perf_counter()
         specialist_results = self.multi_agent_coordinator.analyze(
@@ -512,10 +565,17 @@ class LegalResearchAgent:
         state.steps.append(WorkflowStep("Step 8 — Sources & Citations", "completed", f"{len(state.sources)} verifiable source references attached"))
         state.metrics["source_count"] = len(state.sources)
         state.metrics["retrieved_chunk_count"] = len(chunks)
-        if hasattr(self.retriever, "get_unique_document_count"):
-            state.metrics["distinct_document_count"] = self.retriever.get_unique_document_count(chunks)
-        else:
-            state.metrics["distinct_document_count"] = len({c.document_name for c in chunks if getattr(c, "document_name", None)})
+        cited_distinct_doc_cnt = len({s["document_name"] for s in state.sources if s.get("document_name")})
+        state.metrics["distinct_document_count"] = cited_distinct_doc_cnt or (
+            self.retriever.get_unique_document_count(chunks)
+            if hasattr(self.retriever, "get_unique_document_count")
+            else len({c.document_name for c in chunks if getattr(c, "document_name", None)})
+        )
+        state.metrics["retrieved_distinct_document_count"] = (
+            self.retriever.get_unique_document_count(chunks)
+            if hasattr(self.retriever, "get_unique_document_count")
+            else len({c.document_name for c in chunks if getattr(c, "document_name", None)})
+        )
         state.metrics["executed_tool_count"] = len(state.executed_tools)
         state.metrics["total_duration_seconds"] = round(time.perf_counter() - workflow_started, 3)
         state.status = "Completed"

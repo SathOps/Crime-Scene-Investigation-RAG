@@ -1,5 +1,6 @@
 """Automated verification suite for Multi-Agent CSI RAG audit fixes (Tests A through H)."""
 import json
+import re
 import pytest
 from agent.tools import build_legal_tools
 from agent.specialist_agents import (
@@ -356,3 +357,246 @@ def test_h_workflow_execution_status_and_diagnostics():
     assert metrics["retrieved_chunk_count"] == len(state.retrieved_chunks)
     assert "distinct_document_count" in metrics
     assert metrics["distinct_document_count"] == 2  # 02_Witness_Statements.txt and 08_Court_Judgment.txt
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# REGRESSION TEST SUITE (Items 1 through 9)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_1_complete_chronological_timeline_extraction():
+    """Verify chronological ordering, proper sentence boundaries, and TOD window qualification."""
+    full_timeline_text = (
+        "--- EVIDENCE ITEM 01: 02_Witness_Statements.txt (p. 3)\n"
+        "On 10th November 2024 at 17:00 HRS, Ramesh Kumar came to the building lobby demanding to meet Mr. Malhotra and shouted verbal threats.\n\n"
+        "--- EVIDENCE ITEM 02: 02_Witness_Statements.txt (p. 1)\n"
+        "On 13th November 2024, at around 20:30 HRS, Mr. Vikram Malhotra arrived in his car and went up to his 4th floor office #402.\n\n"
+        "--- EVIDENCE ITEM 03: 03_CCTV_Analysis_Report.txt (p. 1)\n"
+        "At 21:08:12 HRS on 13th November 2024, Camera 01 captured suspect Ramesh Kumar entering through the rear service gate in a navy blue hooded sweatshirt.\n\n"
+        "--- EVIDENCE ITEM 04: 02_Witness_Statements.txt (p. 2)\n"
+        "At 21:15 HRS on 13th November 2024, Priya Nair claims she observed Ramesh Kumar standing outside the front main entrance in a red leather jacket.\n\n"
+        "--- EVIDENCE ITEM 05: 05_Postmortem_Report.txt (p. 2)\n"
+        "Autopsy PM-894/2024 established estimated Time of Death between 21:15 HRS and 21:35 HRS on 13th November 2024.\n\n"
+        "--- EVIDENCE ITEM 06: 03_CCTV_Analysis_Report.txt (p. 1)\n"
+        "At 21:39:45 HRS on 13th November 2024, suspect was captured hurriedly exiting the rear service emergency stairwell door carrying a black leather briefcase.\n\n"
+        "--- EVIDENCE ITEM 07: 08_Court_Judgment.txt (p. 5)\n"
+        "On 10th January 2025, the Sessions Court pronounced judgment convicting accused Ramesh Kumar under IPC 302 and 392."
+    )
+    tools = {t.name: t for t in build_legal_tools(None)}
+    result = tools["extract_timeline_events"].invoke({"evidence_text": full_timeline_text})
+
+    assert "CHRONOLOGICAL EVENT TIMELINE" in result
+    idx_10_nov = result.find("10th November 2024")
+    idx_21_08 = result.find("21:08")
+    idx_21_15 = result.find("21:15")
+    idx_21_39 = result.find("21:39")
+    idx_10_jan = result.find("10th January 2025")
+
+    assert idx_10_nov != -1 and idx_21_08 != -1 and idx_21_15 != -1 and idx_21_39 != -1 and idx_10_jan != -1
+    assert idx_10_nov < idx_21_08 < idx_21_15 < idx_21_39 < idx_10_jan
+
+    # Verify event categorization
+    assert "[Witness Observation]" in result
+    assert "[CCTV Event]" in result
+    assert "[Judicial Event]" in result
+
+    # Verify TOD qualification
+    assert "[Forensic Estimate: Estimated Time Window of Death]" in result
+    assert "Medical estimate window; not an exact observed event time" in result
+
+    # Verify no sliced sentence fragments like "a ("
+    assert not re.search(r'\-\s*\*\*[^*]+\*\*\s*:\s*[a-z]\s*\(', result)
+
+
+def test_2_timeline_extraction_from_multiple_chunks_in_one_document():
+    """Verify extracting timeline events across multiple chunks originating from one judgment document."""
+    multi_chunks = [
+        DocumentChunk(
+            chunk_id="cj_c1",
+            document_name="08_Court_Judgment.txt",
+            document_type="Court Judgment",
+            page_number=1,
+            score=0.9,
+            text="1. Prosecution Case: Offence occurred on 13th November 2024 between 21:15 HRS and 21:35 HRS. Accused entered rear gate at 21:08 HRS."
+        ),
+        DocumentChunk(
+            chunk_id="cj_c2",
+            document_name="08_Court_Judgment.txt",
+            document_type="Court Judgment",
+            page_number=3,
+            score=0.88,
+            text="3. Contradictions: Guard Ankit observed accused at 21:08 HRS, while Priya Nair claimed seeing accused at front gate at 21:15 HRS."
+        ),
+        DocumentChunk(
+            chunk_id="cj_c3",
+            document_name="08_Court_Judgment.txt",
+            document_type="Court Judgment",
+            page_number=4,
+            score=0.87,
+            text="4. Forensic Evidence: Time of Death was between 21:15 HRS and 21:35 HRS. Accused exited at 21:39 HRS. Judgment pronounced on 10th January 2025."
+        )
+    ]
+    retriever = RAGRetriever(MockVectorStoreManager(multi_chunks), MockEmbeddingService())
+    tools = {t.name: t for t in build_legal_tools(retriever)}
+    context = retriever.format_chunks_for_context(multi_chunks)
+
+    result = tools["extract_timeline_events"].invoke({"evidence_text": context})
+    assert "21:08" in result
+    assert "21:15" in result
+    assert "21:39" in result
+    assert "10th January 2025" in result
+
+
+def test_3_malformed_timeline_tool_output_rejection():
+    """Verify tool returns a controlled error when evidence has insufficient temporal markers."""
+    tools = {t.name: t for t in build_legal_tools(None)}
+    no_timestamps_text = (
+        "The accused pleaded an alibi under Section 11 of the Indian Evidence Act. "
+        "The court analyzed legal arguments, statutory precedents, and evidentiary burdens."
+    )
+    result = tools["extract_timeline_events"].invoke({"evidence_text": no_timestamps_text})
+    assert "Controlled Error" in result
+    assert "Insufficient temporal markers" in result
+
+
+def test_4_contradiction_detection_between_witness_accounts():
+    """Verify witness accounts are compared across timing, location, attire, and distinguished from court resolution."""
+    tools = {t.name: t for t in build_legal_tools(None)}
+    witness_text = (
+        "--- 02_Witness_Statements.txt\n"
+        "Security Guard Ankit Sharma stated accused entered through rear gate at 21:08 HRS wearing a navy blue hoodie.\n"
+        "Senior Accountant Priya Nair stated she saw accused standing at front gate at 21:15 HRS wearing a bright red leather jacket.\n"
+        "--- 08_Court_Judgment.txt\n"
+        "CCTV Cameras 01 and 02 corroborated Ankit Sharma's account and attire. Priya Nair's observation was treated as an honest error in timing or identity."
+    )
+    result = tools["analyze_witness_contradictions"].invoke({"evidence_text": witness_text})
+
+    assert "Contradiction Identified: Yes" in result
+    assert "Security Guard Ankit Sharma" in result
+    assert "Senior Accountant Priya Nair" in result
+    assert "21:08" in result and "21:15" in result
+    assert "rear" in result.lower() and "front" in result.lower()
+    assert "hoodie" in result.lower() and "jacket" in result.lower()
+    assert "CCTV" in result
+    assert "honest error" in result.lower()
+    assert "does not erase" in result.lower() or "does not negate" in result.lower()
+
+
+def test_5_specialist_disagreement_reconciliation_and_correction():
+    """Verify coordinator corrects a specialist that erroneously denies contradiction due to court resolution."""
+    class StubDenialLLM(LLMService):
+        def __init__(self):
+            super().__init__(provider="mock")
+        def generate_text_response(self, system_prompt, user_prompt, temperature=0.1):
+            return "Based on the court judgment, there is no contradiction between the witness statements because the court held it was an honest error."
+
+    coordinator = MultiAgentCoordinator(StubDenialLLM())
+    evidence_ctx = (
+        "Security Guard Ankit Sharma (rear gate, 21:08, navy blue hoodie). "
+        "Senior Accountant Priya Nair (front gate, 21:15, red leather jacket). "
+        "Court resolved discrepancy as an honest error."
+    )
+    analyses = coordinator.analyze(
+        query="Are there contradictions between the witness statements?",
+        intent=IntentType.CONTRADICTION_ANALYSIS,
+        evidence_context=evidence_ctx
+    )
+
+    # The specialist output must be sanitized and must NOT state 'no contradiction'
+    for a in analyses:
+        assert "no contradiction between the witness statements" not in a.analysis.lower()
+        assert "Contradiction Identified: Yes" in a.analysis
+
+    reconciled = coordinator.reconcile_analyses(analyses, SAMPLE_WITNESS_CHUNKS, IntentType.CONTRADICTION_ANALYSIS)
+    assert "Authoritative Consensus" in reconciled
+    assert "factual contradiction DOES exist" in reconciled
+
+
+def test_6_answer_and_limitations_consistency():
+    """Verify that contradictory limitations are scrubbed and generic limitations removed."""
+    answer = LegalResearchAnswer(
+        query="Are there contradictions between the witness statements?",
+        intent="CONTRADICTION_ANALYSIS",
+        answer="Contradiction identified: Yes. Factual discrepancies exist between Ankit Sharma and Priya Nair.",
+        key_findings=[
+            "Contradiction identified: Ankit Sharma and Priya Nair gave factually conflicting accounts.",
+            "Accused was convicted under IPC 302 and 392."
+        ],
+        evidence_summary=["[08_Court_Judgment.txt, p. 3] Evaluated witness contradictions."],
+        limitations=[
+            "The judgment contains no direct contradictions between the witness statements.",
+            "No explicit court verdict or operative order was present.",
+            "Information strictly bounded by uploaded case documents.",
+            "Original audio recordings of depositions were not available."
+        ],
+        sources=[]
+    )
+
+    reconciled_answer = LLMService._validate_and_reconcile_answer_consistency(
+        answer,
+        query="Are there contradictions between the witness statements?",
+        chunks=SAMPLE_WITNESS_CHUNKS
+    )
+
+    lims = [l.lower() for l in reconciled_answer.limitations]
+    assert not any("no direct contradictions" in l for l in lims)
+    assert not any("no explicit court verdict" in l for l in lims)
+    assert not any("strictly bounded" in l for l in lims)
+    assert any("original audio recordings" in l for l in lims)
+
+
+def test_7_correct_evidence_selection_for_each_intent():
+    """Verify select_evidence_for_intent filters chunks properly for each intent type."""
+    from agent.legal_research_agent import select_evidence_for_intent
+
+    all_chunks = [
+        DocumentChunk(chunk_id="t1", document_name="03_CCTV.txt", document_type="CCTV", page_number=1, score=0.8,
+                      text="Timestamp 21:08:12 HRS on 13 November 2024: Rear gate entry recorded on CCTV."),
+        DocumentChunk(chunk_id="w1", document_name="02_Witness.txt", document_type="Witness", page_number=1, score=0.8,
+                      text="Witness statement: Ankit Sharma deposed that accused entered through rear gate."),
+        DocumentChunk(chunk_id="f1", document_name="04_Forensic.txt", document_type="Forensic", page_number=1, score=0.8,
+                      text="Ballistics and GSR test confirmed gunshot residue on accused right hand."),
+        DocumentChunk(chunk_id="a1", document_name="06_Police.txt", document_type="Police", page_number=1, score=0.8,
+                      text="Alibi verification: Cell tower Shivajinagar-BS-04 CDR log refutes presence at cafe.")
+    ]
+
+    timeline_selected = select_evidence_for_intent(all_chunks, IntentType.TIMELINE, "timeline of events")
+    assert any(c.chunk_id == "t1" for c in timeline_selected)
+
+    witness_selected = select_evidence_for_intent(all_chunks, IntentType.CONTRADICTION_DETECTION, "witness contradictions")
+    assert any(c.chunk_id == "w1" for c in witness_selected)
+
+    forensic_selected = select_evidence_for_intent(all_chunks, IntentType.EVIDENCE_ANALYSIS, "forensic findings")
+    assert any(c.chunk_id == "f1" for c in forensic_selected)
+
+    alibi_selected = select_evidence_for_intent(all_chunks, IntentType.ACCUSED_INFORMATION, "alibi verification")
+    assert any(c.chunk_id == "a1" for c in alibi_selected)
+
+
+def test_8_citation_integrity_and_source_deduplication():
+    """Verify 5 chunks from 1 document are not counted as 5 independent documents."""
+    five_chunks_same_doc = [
+        DocumentChunk(chunk_id=f"cj_{i}", document_name="08_Court_Judgment.txt", document_type="Court Judgment",
+                      page_number=i, score=0.9 - i * 0.02, text=f"Judgment excerpt section {i}")
+        for i in range(1, 6)
+    ]
+    agent = LegalResearchAgent(
+        retriever=RAGRetriever(MockVectorStoreManager(five_chunks_same_doc), MockEmbeddingService()),
+        llm_service=MockLLMService()
+    )
+
+    state = agent.run_workflow(query="What was the court judgment?", top_k=5)
+    assert state.status == "Completed"
+    assert state.metrics["retrieved_chunk_count"] == 5
+    assert state.metrics["distinct_document_count"] == 1
+
+
+def test_9_out_of_scope_query_refusal():
+    """Verify out-of-scope query refusal without hallucinations."""
+    empty_retriever = RAGRetriever(MockVectorStoreManager([]), MockEmbeddingService())
+    agent = LegalResearchAgent(retriever=empty_retriever, llm_service=MockLLMService())
+
+    state = agent.run_workflow(query="Who won the 2024 FIFA World Cup?")
+    assert state.status == "Completed"
+    assert state.evidence_strength == "Insufficient"
+    assert "could not find sufficient supporting information" in state.structured_answer.answer.lower()
+    assert len(state.sources) == 0
