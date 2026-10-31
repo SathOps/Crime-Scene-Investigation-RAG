@@ -5,8 +5,9 @@ from typing import List, Dict, Any, Tuple, Optional
 from pydantic import ValidationError
 
 from config import OLLAMA_BASE_URL, OLLAMA_MODEL
-from models.schemas import DocumentChunk, IntentType, LegalResearchAnswer, SourceModel
+from models.schemas import DocumentChunk, IntentType, LegalResearchAnswer, SourceModel, TimelineEvent
 from prompts.legal_research_prompt import LEGAL_RESEARCH_PROMPT_TEMPLATE
+from agent.timeline_pipeline import TimelinePipeline
 
 class LLMService:
     """LangChain-powered LLM Service supporting Ollama (ChatOllama), Gemini, OpenAI,
@@ -524,58 +525,26 @@ class LLMService:
         query: str,
         chunks: List[DocumentChunk],
     ) -> LegalResearchAnswer:
-        """Ensure timeline queries return a genuinely chronological timeline rather than a generic summary."""
+        """Ensure timeline queries return a genuinely chronological timeline table derived from chunks without hardcoding."""
         q_lower = (query or "").lower()
         is_timeline_q = (
             str(getattr(answer, "intent", "")).upper() == "TIMELINE"
             or any(term in q_lower for term in ("timeline", "chronolog", "sequence of events", "what happened when", "order of events"))
         )
-        if not is_timeline_q:
+        if not is_timeline_q or not chunks:
             return answer
 
-        chunks_text = " ".join(c.text for c in chunks)
-        time_matches = re.findall(r'\b\d{1,2}:\d{2}\b', chunks_text)
-        date_matches = re.findall(r'\b\d{1,2}(?:st|nd|rd|th)?\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+\d{4}\b', chunks_text, re.I)
-
-        if not time_matches and not date_matches:
-            return answer
-
-        ans_lower = (answer.answer or "").lower()
-        has_chronological_structure = (
-            ("21:08" in ans_lower or "21:10" in ans_lower)
-            and "21:15" in ans_lower
-            and "21:39" in ans_lower
-            and any(b in ans_lower for b in ("- **", "1.", "2.", "•", "chronological"))
-        )
-
-        if not has_chronological_structure:
-            timeline_lines = [
-                "CHRONOLOGICAL EVENT TIMELINE:",
-                "- **10 November 2024 (17:00 HRS)**: [Witness Observation / Altercation] Ramesh Kumar arrived at Apex Towers building lobby demanding to meet MD Vikram Malhotra and issued verbal threats after being terminated. *(Source: 02_Witness_Statements.txt, p. 3)*",
-                "- **13 November 2024 (20:30 HRS)**: [Case Event] MD Vikram Malhotra arrived at Apex Towers and went up to Office #402 to conduct a late-night financial audit. *(Source: 02_Witness_Statements.txt, p. 1)*",
-                "- **13 November 2024 (20:45–22:15 HRS)**: [Alibi Claim - Rejected] Accused claimed presence at Blue Dart Cafe in Aundh; alibi was rejected based on cell tower CDR (Shivajinagar-BS-04) and cafe manager testimony. *(Source: 08_Court_Judgment.txt, p. 2)*",
-                "- **13 November 2024 (21:08 HRS)**: [CCTV Event / Witness Observation] CCTV Camera 01 and Security Guard Ankit Sharma recorded accused entering through rear service gate in a dark navy blue hooded sweatshirt. *(Source: 03_CCTV_Analysis_Report.txt, p. 1; 08_Court_Judgment.txt, p. 3)*",
-                "- **13 November 2024 (21:12–21:45 HRS)**: [CCTV Event] Camera 03 (4th floor corridor outside Office #402) went offline due to physical power disconnection at the junction box. *(Source: 03_CCTV_Analysis_Report.txt, p. 2)*",
-                "- **13 November 2024 (21:15 HRS)**: [Witness Observation - Uncorroborated] Witness Priya Nair claimed seeing accused standing outside front main entrance in a bright red leather jacket; CCTV Camera 02 refuted this claim, and court treated it as an honest error. *(Source: 02_Witness_Statements.txt, p. 2; 08_Court_Judgment.txt, p. 3)*",
-                "- **13 November 2024 (21:15–21:35 HRS)**: [Forensic Estimate: Estimated Time Window of Death] Autopsy report PM-894/2024 established the estimated time window of death between 21:15 HRS and 21:35 HRS from a close-range firearm wound to the chest *(Medical estimate window; not an exact observed event time)*. *(Source: 05_Postmortem_Report.txt, p. 2; 08_Court_Judgment.txt, p. 4)*",
-                "- **13 November 2024 (21:25 HRS)**: [Witness Observation] Security Guard Ankit Sharma heard a loud muffled bang followed by a heavy thud from the upper floors. *(Source: 02_Witness_Statements.txt, p. 1)*",
-                "- **13 November 2024 (21:39 HRS)**: [CCTV Event] CCTV Camera 01 recorded accused fleeing through rear emergency stairwell exit door holding a black leather briefcase. *(Source: 03_CCTV_Analysis_Report.txt, p. 1; 08_Court_Judgment.txt, p. 4)*",
-                "- **13 November 2024 (21:40 HRS)**: [Witness Observation] Security Guard Ankit Sharma observed accused run toward a side lane and speed away on a motorcycle with the briefcase. *(Source: 02_Witness_Statements.txt, p. 1)*",
-                "- **13 November 2024 (21:50 HRS)**: [Witness Observation] Security Guard Ankit Sharma discovered Vikram Malhotra deceased on the floor in Office #402. *(Source: 02_Witness_Statements.txt, p. 1)*",
-                "- **10 January 2025**: [Judicial Event] Sessions Court Pune pronounced final judgment convicting accused Ramesh Kumar of murder (IPC Section 302) and robbery (IPC Section 392). *(Source: 08_Court_Judgment.txt, p. 5)*"
-            ]
-            answer.answer = "\n\n".join(timeline_lines)
+        timeline_result = TimelinePipeline.extract_events_structured(chunks)
+        if timeline_result.validation_status != "insufficient" and timeline_result.events:
+            answer.answer = TimelinePipeline.format_timeline_markdown_table(timeline_result)
+            answer.timeline_events = timeline_result.events
             answer.key_findings = [
-                "Reconstructed chronological timeline spans the altercation on 10 Nov 2024, the crime window on 13 Nov 2024, and judgment on 10 Jan 2025.",
-                "CCTV Camera 01 recorded accused entering rear gate at 21:08 HRS (navy blue hoodie) and exiting at 21:39 HRS with victim's briefcase.",
-                "Autopsy PM-894/2024 established estimated time window of death between 21:15 HRS and 21:35 HRS (qualified as medical estimate window, not exact point event).",
-                "Sessions Court rejected defense alibi (20:45–22:15 HRS) via CDR and CCTV gait analysis, convicting accused on 10 January 2025."
+                f"{evt.date} ({evt.time or 'Time unstated'}): [{evt.event_type}] {evt.event_description[:160]}"
+                for evt in timeline_result.events[:5]
             ]
             answer.evidence_summary = [
-                "[08_Court_Judgment.txt, p. 1] Prosecution case establishing homicide on 13 Nov 2024 between 21:15–21:35 HRS in Office #402.",
-                "[03_CCTV_Analysis_Report.txt, p. 1] Digital forensics confirming Camera 01 rear gate entry at 21:08:12 HRS and exit at 21:39:45 HRS.",
-                "[02_Witness_Statements.txt, p. 1] Night security guard Ankit Sharma deposing to entry at ~21:10 HRS, bang at 21:25 HRS, and flight at 21:40 HRS.",
-                "[05_Postmortem_Report.txt, p. 2] Conclusive time window of death fixed between 21:15 HRS and 21:35 HRS on 13 Nov 2024."
+                f"[{evt.source_document_ids[0] if evt.source_document_ids else 'Case Record'}] {evt.supporting_quote[:200]}"
+                for evt in timeline_result.events[:5]
             ]
 
         timeline_stale_limitations = re.compile(

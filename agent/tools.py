@@ -2,6 +2,54 @@
 from typing import List
 from langchain_core.tools import tool
 from utils.query_normalizer import QueryNormalizer
+from models.schemas import DocumentChunk
+from agent.timeline_pipeline import TimelinePipeline
+
+
+def text_to_document_chunks(text: str) -> List[DocumentChunk]:
+    """Parse formatted context string or raw text into DocumentChunk objects."""
+    import re
+    if not text or not text.strip():
+        return []
+
+    items = re.findall(
+        r'(?:---\s*EVIDENCE ITEM \d+:?\s*([^\n]+?)(?:\s*---)?\n(.*?)(?=(?:---\s*EVIDENCE ITEM|\Z)))',
+        text,
+        re.DOTALL
+    )
+    if items:
+        chunks = []
+        for idx, (header, body) in enumerate(items, 1):
+            doc_name = "Retrieved Case Record"
+            page_num = 1
+            chunk_id = f"item_{idx:02d}"
+
+            doc_match = re.search(r'([a-zA-Z0-9_\-\.]+\.(?:txt|pdf|docx))', header)
+            if doc_match:
+                doc_name = doc_match.group(1)
+            page_match = re.search(r'(?:Page|p\.)\s*(\d+)', header)
+            if page_match:
+                page_num = int(page_match.group(1))
+            chunk_match = re.search(r'Chunk\s*#?([a-zA-Z0-9_\-]+)', header)
+            if chunk_match:
+                chunk_id = chunk_match.group(1)
+
+            chunks.append(DocumentChunk(
+                chunk_id=chunk_id,
+                document_name=doc_name,
+                document_type=doc_name.split("_")[-1].replace(".txt", "") if "_" in doc_name else "Case Record",
+                page_number=page_num,
+                text=body.strip()
+            ))
+        return chunks
+
+    return [DocumentChunk(
+        chunk_id="chunk_01",
+        document_name="Retrieved Case Record",
+        document_type="Case Record",
+        page_number=1,
+        text=text.strip()
+    )]
 
 
 def build_legal_tools(retriever):
@@ -38,10 +86,12 @@ def build_legal_tools(retriever):
         if not text:
             return "No retrieved evidence was supplied; no timeline can be extracted."
 
-        # If supplied text is sparse in temporal markers, and retriever is available,
-        # gather comprehensive timeline chunks across the case index.
-        time_matches_initial = len(re.findall(r'\b\d{1,2}:\d{2}\b', text))
-        if time_matches_initial < 3 and retriever is not None:
+        parsed_chunks = text_to_document_chunks(text)
+        result = TimelinePipeline.extract_events_structured(parsed_chunks)
+
+        # If supplied text lacks sufficient temporal events, and retriever is available,
+        # supplement with comprehensive timeline chunks from the session vector store.
+        if (result.validation_status == "insufficient" or len(result.events) < 3) and retriever is not None:
             try:
                 timeline_chunks, _ = retriever.retrieve_evidence(
                     query="chronological timeline dates timestamps CCTV postmortem 13 November 2024 21:08 21:15 21:35 21:39 10 January 2025",
@@ -49,127 +99,18 @@ def build_legal_tools(retriever):
                     intent="TIMELINE"
                 )
                 if timeline_chunks:
-                    supplemental_context = retriever.format_chunks_for_context(timeline_chunks)
-                    text = (text + "\n\n" + supplemental_context).strip()
+                    combined = list(parsed_chunks) + [c for c in timeline_chunks if c.chunk_id not in {p.chunk_id for p in parsed_chunks}]
+                    result = TimelinePipeline.extract_events_structured(combined)
             except Exception:
                 pass
 
-        # Robust sentence boundary extraction helper
-        def _extract_sentence_boundary(src_text: str, match_start: int, match_end: int) -> str:
-            left = match_start
-            while left > 0:
-                if src_text[left - 1] in "\n":
-                    break
-                if src_text[left - 1] in ".!?" and left < len(src_text) and src_text[left].isspace():
-                    break
-                left -= 1
-
-            right = match_end
-            while right < len(src_text):
-                if src_text[right] in "\n":
-                    break
-                if src_text[right] in ".!?" and (right + 1 == len(src_text) or src_text[right + 1].isspace()):
-                    right += 1
-                    break
-                right += 1
-
-            snippet = src_text[left:right].strip()
-            # Clean leading list markers, broken punctuation, or bullets
-            snippet = re.sub(r'^(?:[-*•#\d.]+|\([a-zA-Z\d]+\))\s*', '', snippet).strip()
-            snippet = re.sub(r'^\s*[,;:)]+\s*', '', snippet).strip()
-            snippet = re.sub(r'\s+', ' ', snippet)
-            return snippet
-
-        # Event categorization helper
-        def _categorize_event(snippet: str, stamp: str) -> tuple:
-            s_lower = snippet.lower()
-            if any(k in s_lower for k in ("postmortem", "time of death", "autopsy", "pm-894", "estimated time")):
-                return (
-                    "[Forensic Estimate: Estimated Time Window of Death]",
-                    " *(Medical estimate window; not an exact observed event time)*"
-                )
-            if any(k in s_lower for k in ("cctv", "camera", "dvr", "gait analysis", "video stream", "video log")):
-                return ("[CCTV Event]", "")
-            if any(k in s_lower for k in ("judgment", "verdict", "pronounced", "convicted", "sentenced", "sessions court", "sessions judge")):
-                return ("[Judicial Event]", "")
-            if any(k in s_lower for k in ("witness", "ankit", "priya", "suresh", "saw", "observed", "stated", "testified", "deposed", "heard")):
-                return ("[Witness Observation]", "")
-            if any(k in s_lower for k in ("alleged", "prosecution", "charges", "embezzlement", "robbed")):
-                return ("[Prosecution Allegation]", "")
-            return ("[Case Event]", "")
-
-        pattern = r'(\b\d{1,2}(?:st|nd|rd|th)?\s+(?:January|February|March|April|May|June|July|August|September|October|November|December|Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+\d{4}\b|\b\d{1,2}:\d{2}\s*(?:HRS|AM|PM)?\s*(?:to|-|–|and)\s*\d{1,2}:\d{2}\s*(?:HRS|AM|PM)?\b|\b\d{1,2}:\d{2}(?::\d{2})?\s*(?:HRS|AM|PM)?\b|\b\d{1,2}/\d{1,2}/\d{2,4}\b|\b\d{4}-\d{2}-\d{2}\b)'
-
-        raw_events = []
-        seen_keys = set()
-        month_map = {
-            "jan": 1, "feb": 2, "mar": 3, "apr": 4, "may": 5, "jun": 6,
-            "jul": 7, "aug": 8, "sep": 9, "oct": 10, "nov": 11, "dec": 12
-        }
-
-        for match in re.finditer(pattern, text, re.IGNORECASE):
-            stamp = match.group(0).strip()
-            stamp_norm = re.sub(r'\s+', ' ', stamp.lower())
-
-            snippet = _extract_sentence_boundary(text, match.start(), match.end())
-            if not snippet or len(snippet) < 15:
-                continue
-
-            # Dedup key combines normalized stamp and first 40 chars of snippet
-            dedup_key = f"{stamp_norm}::{snippet[:40].lower()}"
-            if dedup_key in seen_keys:
-                continue
-            seen_keys.add(dedup_key)
-
-            # Extract source attribution preceding snippet
-            source_match = re.search(r'(?:Source File|--- EVIDENCE ITEM|\[)([^,\n\]]+)', text[max(0, match.start() - 350):match.start()])
-            source_label = source_match.group(1).strip() if source_match else "Retrieved Case Records"
-
-            category_tag, qualification = _categorize_event(snippet, stamp)
-
-            # Identify associated date for chronological sorting
-            year, month, day = 2024, 11, 13
-            date_search = re.search(r'(\d{1,2})(?:st|nd|rd|th)?\s+(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+(\d{4})', snippet, re.I)
-            if not date_search:
-                date_search = re.search(r'(\d{1,2})(?:st|nd|rd|th)?\s+(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+(\d{4})', text[max(0, match.start() - 400):match.start()], re.I)
-
-            if date_search:
-                day = int(date_search.group(1))
-                month = month_map.get(date_search.group(2).lower()[:3], 11)
-                year = int(date_search.group(3))
-
-            # Identify time
-            hour, minute = 0, 0
-            time_match = re.search(r'(\d{1,2}):(\d{2})', stamp)
-            if time_match:
-                hour = int(time_match.group(1))
-                minute = int(time_match.group(2))
-
-            # Range indicator
-            is_range = 1 if any(sep in stamp for sep in ("-", "–", "to", "and")) else 0
-
-            sort_tuple = (year, month, day, hour, minute, is_range)
-            raw_events.append((sort_tuple, stamp, category_tag, snippet, qualification, source_label))
-
-        if len(raw_events) < 2:
+        if result.validation_status == "insufficient" or not result.events:
             return (
                 "Controlled Error: Unable to extract a reliable chronological timeline from the provided evidence. "
                 "Insufficient temporal markers or timeline passages found in the supplied records."
             )
 
-        raw_events.sort(key=lambda x: x[0])
-
-        formatted_lines = []
-        for sort_tuple, stamp, category_tag, snippet, qualification, source_label in raw_events:
-            formatted_lines.append(
-                f"- **{stamp}**: {category_tag} {snippet}{qualification} *(Source: {source_label})*"
-            )
-
-        return (
-            "CHRONOLOGICAL EVENT TIMELINE (Extracted from retrieved records):\n"
-            + "\n".join(formatted_lines)
-            + "\n\nNote: All extracted events are grounded in retrieved case documents. Estimated time windows (such as postmortem time of death) represent medical opinions rather than exact observed point events."
-        )
+        return TimelinePipeline.format_timeline_markdown_table(result)
 
     @tool
     def analyze_witness_contradictions(evidence_text: str) -> str:

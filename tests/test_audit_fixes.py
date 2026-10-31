@@ -600,3 +600,233 @@ def test_9_out_of_scope_query_refusal():
     assert state.evidence_strength == "Insufficient"
     assert "could not find sufficient supporting information" in state.structured_answer.answer.lower()
     assert len(state.sources) == 0
+
+
+def test_10_timeline_evidence_bundle_context_budget_and_exclusions():
+    """Verify build_evidence_bundle tracks selected chunks, exclusions, and reasons."""
+    from agent.timeline_pipeline import TimelinePipeline
+    chunks = [
+        DocumentChunk(
+            chunk_id=f"c_{i}",
+            document_name="02_Witness.txt",
+            document_type="Witness",
+            page_number=1,
+            score=0.9,
+            text=f"At 21:0{i} HRS on 13 November 2024, event {i} was observed in the building corridor."
+        )
+        for i in range(10)
+    ]
+    selected, bundle = TimelinePipeline.build_evidence_bundle(
+        chunks=chunks,
+        intent="TIMELINE",
+        query="timeline",
+        max_budget_chars=280
+    )
+    assert len(selected) < len(chunks)
+    assert len(bundle.excluded_chunk_ids) > 0
+    assert bundle.total_chunks_retrieved == 10
+    assert len(bundle.selected_chunk_ids) == len(selected)
+    for excluded_id in bundle.excluded_chunk_ids:
+        assert excluded_id in bundle.exclusion_reasons
+        assert "Context budget limit" in bundle.exclusion_reasons[excluded_id]
+
+
+def test_11_timeline_time_ranges_and_medical_window():
+    """Verify time range extraction, normalization, and medical window qualification."""
+    from agent.timeline_pipeline import TimelinePipeline
+    chunk = DocumentChunk(
+        chunk_id="pm_01",
+        document_name="05_Postmortem_Report.txt",
+        document_type="Postmortem Report",
+        page_number=2,
+        score=0.95,
+        text="Autopsy PM-894/2024 established estimated Time of Death between 21:15 HRS and 21:35 HRS on 13th November 2024 due to craniocerebral injury."
+    )
+    result = TimelinePipeline.extract_events_structured([chunk])
+    assert len(result.events) == 1
+    evt = result.events[0]
+    assert evt.start_time == "21:15 HRS"
+    assert evt.end_time == "21:35 HRS"
+    assert evt.event_type == "Forensic Estimate"
+    assert evt.certainty == "Estimated Window"
+
+
+def test_12_timeline_allegations_vs_judicial_findings():
+    """Verify distinctions between prosecution allegations, defense claims, and judicial findings."""
+    from agent.timeline_pipeline import TimelinePipeline
+    chunks = [
+        DocumentChunk(
+            chunk_id="prosecution_c1",
+            document_name="01_Charge_Sheet.txt",
+            document_type="Charge Sheet",
+            page_number=1,
+            score=0.9,
+            text="The prosecution alleged that at 21:05 HRS on 13 November 2024 the accused arrived with premeditated intent."
+        ),
+        DocumentChunk(
+            chunk_id="defense_c1",
+            document_name="07_Defense_Brief.txt",
+            document_type="Defense Brief",
+            page_number=1,
+            score=0.85,
+            text="The defense claimed presence at Blue Dart Cafe at 21:10 HRS on 13 November 2024 and pleaded an alibi under Section 11."
+        ),
+        DocumentChunk(
+            chunk_id="court_c1",
+            document_name="08_Court_Judgment.txt",
+            document_type="Court Judgment",
+            page_number=5,
+            score=0.95,
+            text="The Sessions Court pronounced judgment convicting accused on 10th January 2025 and holding the alibi is rejected."
+        )
+    ]
+    result = TimelinePipeline.extract_events_structured(chunks)
+    types = [evt.event_type for evt in result.events]
+    assert "Prosecution Allegation" in types
+    assert "Defense Claim" in types
+    assert "Judicial Finding" in types or "Judgment Date" in types
+    allegation_evt = [e for e in result.events if e.event_type == "Prosecution Allegation"][0]
+    assert allegation_evt.certainty == "Contested / Alleged"
+
+
+def test_13_timeline_undated_events_and_duplicate_merging():
+    """Verify duplicate events across overlapping chunks are merged and undated actions captured."""
+    from agent.timeline_pipeline import TimelinePipeline
+    c1 = DocumentChunk(
+        chunk_id="c1",
+        document_name="03_CCTV.txt",
+        document_type="CCTV",
+        page_number=1,
+        score=0.9,
+        text="At 21:08:12 HRS on 13th November 2024, Camera 01 captured suspect Ramesh Kumar entering through the rear service gate."
+    )
+    c2 = DocumentChunk(
+        chunk_id="c2",
+        document_name="08_Judgment.txt",
+        document_type="Judgment",
+        page_number=2,
+        score=0.88,
+        text="At 21:08:12 HRS on 13th November 2024, Camera 01 captured suspect Ramesh Kumar entering through the rear service gate."
+    )
+    c3 = DocumentChunk(
+        chunk_id="c3",
+        document_name="06_Police.txt",
+        document_type="Police Report",
+        page_number=2,
+        score=0.8,
+        text="Police inspected the crime scene and seized the bloodstained weapon. Investigating officer interrogated the building security staff."
+    )
+    result = TimelinePipeline.extract_events_structured([c1, c2, c3])
+    # Duplicate c1 and c2 should be merged into 1 event
+    assert len(result.events) == 1
+    merged_evt = result.events[0]
+    assert "c1" in merged_evt.source_chunk_ids
+    assert "c2" in merged_evt.source_chunk_ids
+    assert "03_CCTV.txt" in merged_evt.source_document_ids
+    assert "08_Judgment.txt" in merged_evt.source_document_ids
+
+    # Undated action should be captured in undated_events
+    assert len(result.undated_events) >= 1
+    assert any("seized" in u.event_description.lower() for u in result.undated_events)
+
+
+def test_14_timeline_semantic_provenance_validation():
+    """Verify that events with hallucinated quotes not in source chunks are pruned."""
+    from agent.timeline_pipeline import TimelinePipeline
+    from models.schemas import TimelineEvent, TimelineExtractionResult
+    chunk = DocumentChunk(
+        chunk_id="chunk_real",
+        document_name="02_Witness.txt",
+        document_type="Witness",
+        page_number=1,
+        score=0.9,
+        text="At 21:08 HRS on 13 November 2024, Ankit Sharma saw the accused enter."
+    )
+    fake_evt = TimelineEvent(
+        event_id="fake_01",
+        date="13 November 2024",
+        time="21:45 HRS",
+        event_description="Suspect purchased coffee at the station cafe.",
+        actors=["Ramesh Kumar"],
+        event_type="Witness Observation",
+        source_type="Witness",
+        source_chunk_ids=["chunk_real"],
+        source_document_ids=["02_Witness.txt"],
+        supporting_quote="Suspect purchased coffee at the station cafe with counterfeit notes.",
+        certainty="Documented"
+    )
+    real_evt = TimelineEvent(
+        event_id="real_01",
+        date="13 November 2024",
+        time="21:08 HRS",
+        event_description="At 21:08 HRS on 13 November 2024, Ankit Sharma saw the accused enter.",
+        actors=["Ankit Sharma"],
+        event_type="Witness Observation",
+        source_type="Witness",
+        source_chunk_ids=["chunk_real"],
+        source_document_ids=["02_Witness.txt"],
+        supporting_quote="At 21:08 HRS on 13 November 2024, Ankit Sharma saw the accused enter.",
+        certainty="Documented"
+    )
+    initial_res = TimelineExtractionResult(
+        events=[fake_evt, real_evt],
+        undated_events=[],
+        selected_chunk_ids=["chunk_real"],
+        selected_document_ids=["02_Witness.txt"],
+        total_chunks_considered=1,
+        total_events_extracted=2,
+        validation_status="valid",
+        notes=[]
+    )
+    validated = TimelinePipeline.validate_timeline_result(initial_res, [chunk])
+    assert len(validated.events) == 1
+    assert validated.events[0].event_id == "real_01"
+
+
+def test_15_contradiction_evidence_selection_excludes_alibi():
+    """Verify contradiction analysis receives witness statements and excludes unrelated alibi/cafe passages."""
+    from agent.legal_research_agent import select_evidence_for_intent
+    mixed_chunks = [
+        DocumentChunk(
+            chunk_id="w_ankit",
+            document_name="02_Witness_Statements.txt",
+            document_type="Witness Statements",
+            page_number=1,
+            score=0.9,
+            text="Security Guard Ankit Sharma stated accused entered rear gate at 21:08 wearing navy blue hoodie."
+        ),
+        DocumentChunk(
+            chunk_id="w_priya",
+            document_name="02_Witness_Statements.txt",
+            document_type="Witness Statements",
+            page_number=2,
+            score=0.88,
+            text="Senior Accountant Priya Nair stated she saw accused at front gate at 21:15 wearing red jacket."
+        ),
+        DocumentChunk(
+            chunk_id="alibi_cafe",
+            document_name="06_Police_Investigation_Report.txt",
+            document_type="Police Report",
+            page_number=4,
+            score=0.82,
+            text="Alibi verification: Cell tower Shivajinagar-BS-04 CDR log refutes presence at Blue Dart cafe. Cafe manager stated no table reservation was made."
+        ),
+        DocumentChunk(
+            chunk_id="forensic_ballistics",
+            document_name="04_Forensic_Report.txt",
+            document_type="Forensic",
+            page_number=1,
+            score=0.8,
+            text="7.65mm spent cartridge matched recovered country-made pistol."
+        )
+    ]
+    selected = select_evidence_for_intent(
+        chunks=mixed_chunks,
+        intent=IntentType.CONTRADICTION_ANALYSIS,
+        query="Are there contradictions between the witness statements?"
+    )
+    selected_ids = [c.chunk_id for c in selected]
+    assert "w_ankit" in selected_ids
+    assert "w_priya" in selected_ids
+    assert "alibi_cafe" not in selected_ids
+    assert "forensic_ballistics" not in selected_ids

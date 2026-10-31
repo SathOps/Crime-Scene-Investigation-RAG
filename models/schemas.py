@@ -84,6 +84,53 @@ class SourceModel(BaseModel):
     chunk_id: str = Field(description="Unique chunk identifier")
     excerpt: str = Field(description="Relevant text snippet from the document")
 
+class EventType(str, Enum):
+    PROSECUTION_ALLEGATION = "Prosecution Allegation"
+    WITNESS_OBSERVATION = "Witness Observation"
+    CCTV_OBSERVATION = "CCTV Observation"
+    FORENSIC_ESTIMATE = "Forensic Estimate"
+    DEFENSE_CLAIM = "Defense Claim"
+    JUDICIAL_FINDING = "Judicial Finding"
+    JUDGMENT_DATE = "Judgment Date"
+    CASE_EVENT = "Case Event"
+
+class TimelineEvent(BaseModel):
+    event_id: str = Field(description="Unique event identifier (e.g. evt_01)")
+    date: Optional[str] = Field(default=None, description="Event date (e.g. 13 November 2024)")
+    time: Optional[str] = Field(default=None, description="Specific time or timestamp string (e.g. 21:08 HRS)")
+    start_time: Optional[str] = Field(default=None, description="Start time if a range or window (e.g. 21:15 HRS)")
+    end_time: Optional[str] = Field(default=None, description="End time if a range or window (e.g. 21:35 HRS)")
+    event_description: str = Field(description="Objective factual description of what occurred or was stated")
+    actors: List[str] = Field(default_factory=list, description="Persons, entities, or items involved")
+    event_type: str = Field(default=EventType.CASE_EVENT.value, description="Classification of the event")
+    source_type: str = Field(default="Case Document", description="Type of source document")
+    source_chunk_ids: List[str] = Field(default_factory=list, description="IDs of chunks supporting this event")
+    source_document_ids: List[str] = Field(default_factory=list, description="Document names supporting this event")
+    supporting_quote: str = Field(default="", description="Exact excerpt from the source chunk proving this event")
+    certainty: str = Field(default="Documented", description="Certainty level: Documented, Estimated Window, Contested / Alleged")
+
+class TimelineExtractionResult(BaseModel):
+    events: List[TimelineEvent] = Field(default_factory=list)
+    undated_events: List[TimelineEvent] = Field(default_factory=list)
+    selected_chunk_ids: List[str] = Field(default_factory=list)
+    selected_document_ids: List[str] = Field(default_factory=list)
+    excluded_chunk_ids: List[str] = Field(default_factory=list)
+    exclusion_reasons: Dict[str, str] = Field(default_factory=dict)
+    total_chunks_considered: int = 0
+    total_events_extracted: int = 0
+    validation_status: str = "valid"  # "valid", "partial", "insufficient"
+    notes: List[str] = Field(default_factory=list)
+
+class EvidenceBundle(BaseModel):
+    intent: str
+    selected_chunk_ids: List[str] = Field(default_factory=list)
+    selected_document_ids: List[str] = Field(default_factory=list)
+    excluded_chunk_ids: List[str] = Field(default_factory=list)
+    exclusion_reasons: Dict[str, str] = Field(default_factory=dict)
+    total_chunks_retrieved: int = 0
+    formatted_context: str = ""
+    evidence_length_chars: int = 0
+
 class LegalResearchAnswer(BaseModel):
     query: str = Field(description="The user's original legal research question")
     normalized_query: Optional[str] = Field(default=None, description="The preprocessed, normalized research query")
@@ -93,6 +140,7 @@ class LegalResearchAnswer(BaseModel):
     evidence_summary: List[str] = Field(default_factory=list, description="Logical evidence breakdown and witness analysis")
     limitations: List[str] = Field(default_factory=list, description="Information or facts that remain unknown or absent from uploaded documents")
     sources: List[SourceModel] = Field(default_factory=list, description="Verifiable source document references")
+    timeline_events: List[TimelineEvent] = Field(default_factory=list, description="Structured timeline events when intent is TIMELINE")
 
 @dataclass
 class DocumentChunk:
@@ -166,6 +214,8 @@ class WorkflowState:
     validation_error: str = ""
     sources: List[Dict[str, Any]] = field(default_factory=list)
     executed_tools: List[ToolExecution] = field(default_factory=list)
+    timeline_events: List[TimelineEvent] = field(default_factory=list)
+    evidence_bundle: Optional[EvidenceBundle] = None
     metrics: Dict[str, Any] = field(default_factory=dict)
     status: str = "Idle"
 
@@ -194,6 +244,8 @@ class WorkflowState:
             "validation_error": self.validation_error,
             "sources": self.sources,
             "executed_tools": [t.to_dict() for t in self.executed_tools],
+            "timeline_events": [e.model_dump() for e in self.timeline_events],
+            "evidence_bundle": self.evidence_bundle.model_dump() if self.evidence_bundle else None,
             "metrics": self.metrics,
             "status": self.status
         }

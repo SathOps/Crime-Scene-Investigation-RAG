@@ -5,9 +5,13 @@ import time
 from typing import List, Dict, Any, Tuple, Optional, Callable
 from langchain_core.messages import HumanMessage, AIMessage, ToolMessage, SystemMessage
 
-from models.schemas import IntentType, DocumentChunk, WorkflowStep, WorkflowState, LegalResearchAnswer, ToolExecution
+from models.schemas import (
+    IntentType, DocumentChunk, WorkflowStep, WorkflowState,
+    LegalResearchAnswer, ToolExecution, EvidenceBundle, TimelineEvent
+)
 from rag.retriever import RAGRetriever
 from llm.llm_service import LLMService
+from agent.timeline_pipeline import TimelinePipeline
 try:
     from agent.tools import build_legal_tools
 except ImportError:
@@ -232,27 +236,53 @@ class LegalResearchAgent:
                     continue
 
                 try:
-                    # Provide intent-specific evidence if tool was invoked with empty or truncated arguments
-                    if tool_name in {"extract_timeline_events", "analyze_witness_contradictions", "summarize_case_facts"}:
-                        supplied_ev = str(tool_args.get("evidence_text", "")).strip()
-                        if not supplied_ev or len(supplied_ev) < 150:
-                            if tool_name == "extract_timeline_events":
-                                ev_chunks = select_evidence_for_intent(state.retrieved_chunks, IntentType.TIMELINE, query)
-                            elif tool_name == "analyze_witness_contradictions":
-                                ev_chunks = select_evidence_for_intent(state.retrieved_chunks, IntentType.CONTRADICTION_DETECTION, query)
-                            else:
-                                ev_chunks = state.retrieved_chunks
-                            tool_args["evidence_text"] = self.retriever.format_chunks_for_context(ev_chunks)
+                    tool_metadata = {}
+                    if tool_name == "extract_timeline_events":
+                        timeline_chunks, bundle = TimelinePipeline.build_evidence_bundle(
+                            state.retrieved_chunks, intent="TIMELINE", query=query
+                        )
+                        tool_args["evidence_text"] = bundle.formatted_context
+                        tool_metadata = {
+                            "selected_chunk_ids": bundle.selected_chunk_ids,
+                            "selected_document_ids": bundle.selected_document_ids,
+                            "selected_chunk_count": len(bundle.selected_chunk_ids),
+                            "evidence_length_chars": bundle.evidence_length_chars,
+                            "excluded_chunks": bundle.excluded_chunk_ids,
+                            "exclusion_reasons": bundle.exclusion_reasons,
+                        }
+                    elif tool_name == "analyze_witness_contradictions":
+                        ev_chunks = select_evidence_for_intent(state.retrieved_chunks, IntentType.CONTRADICTION_DETECTION, query)
+                        tool_args["evidence_text"] = self.retriever.format_chunks_for_context(ev_chunks)
+                        excluded = [c.chunk_id for c in state.retrieved_chunks if c.chunk_id not in {ec.chunk_id for ec in ev_chunks}]
+                        tool_metadata = {
+                            "selected_chunk_ids": [c.chunk_id for c in ev_chunks],
+                            "selected_document_ids": list(dict.fromkeys(c.document_name for c in ev_chunks)),
+                            "selected_chunk_count": len(ev_chunks),
+                            "evidence_length_chars": len(tool_args["evidence_text"]),
+                            "excluded_chunks": excluded,
+                            "exclusion_reasons": {cid: "Excluded from contradiction analysis (not a witness statement or judicial resolution excerpt)" for cid in excluded}
+                        }
+                    elif tool_name == "summarize_case_facts":
+                        if not str(tool_args.get("evidence_text", "")).strip():
+                            tool_args["evidence_text"] = self.retriever.format_chunks_for_context(state.retrieved_chunks)
+                        tool_metadata = {
+                            "selected_chunk_ids": [c.chunk_id for c in state.retrieved_chunks],
+                            "selected_document_ids": list(dict.fromkeys(c.document_name for c in state.retrieved_chunks)),
+                            "selected_chunk_count": len(state.retrieved_chunks),
+                            "evidence_length_chars": len(tool_args["evidence_text"]),
+                        }
 
                     tool_result = selected_tool.invoke(tool_args)
                     result_str = str(tool_result)
                     logger.info(f"[AGENT TOOL RESULT] Success ({len(result_str)} chars)")
 
+                    recorded_args = dict(tool_args)
+                    recorded_args.update(tool_metadata)
                     tool_exec = ToolExecution(
                         tool_name=tool_name,
-                        tool_args=tool_args,
+                        tool_args=recorded_args,
                         status="completed",
-                        result_preview=result_str[:200]
+                        result_preview=result_str[:300]
                     )
                     state.executed_tools.append(tool_exec)
                     state.steps[-1].status = "completed"
@@ -453,8 +483,16 @@ class LegalResearchAgent:
         state.steps.append(specialist_step)
 
         # Prepare intent-aware filtered evidence context for specialists and tools
-        selected_evidence_chunks = select_evidence_for_intent(chunks, state.intent, query)
-        specialist_context = self.retriever.format_chunks_for_context(selected_evidence_chunks)
+        if state.intent == IntentType.TIMELINE or any(k in query.lower() for k in ("timeline", "chronolog", "sequence", "when did")):
+            timeline_chunks, bundle = TimelinePipeline.build_evidence_bundle(chunks, intent="TIMELINE", query=query)
+            state.evidence_bundle = bundle
+            selected_evidence_chunks = timeline_chunks or chunks
+            specialist_context = bundle.formatted_context
+            timeline_res = TimelinePipeline.extract_events_structured(selected_evidence_chunks)
+            state.timeline_events = timeline_res.events
+        else:
+            selected_evidence_chunks = select_evidence_for_intent(chunks, state.intent, query)
+            specialist_context = self.retriever.format_chunks_for_context(selected_evidence_chunks)
 
         specialist_started = time.perf_counter()
         specialist_results = self.multi_agent_coordinator.analyze(
@@ -539,6 +577,8 @@ class LegalResearchAgent:
         )
 
         state.structured_answer = answer_obj
+        if state.timeline_events and not answer_obj.timeline_events:
+            answer_obj.timeline_events = state.timeline_events
         state.raw_model_response = raw_resp
         state.validation_error = err_msg
         state.response = answer_obj.answer
