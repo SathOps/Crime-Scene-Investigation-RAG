@@ -582,11 +582,30 @@ Access the dashboard at `http://localhost:8501`.
 
 ## 14. Automated Testing & Verification
 
-Run the focused specialist-agent tests (requires `pytest` and Pydantic 2):
+### Multi-Agent Hardening & Audit Verification (Tests A through H)
+The test suite includes comprehensive regression and behavioral verification covering the complete audit:
+- **Test A: Witness Contradiction Detection**: Verifies that witness discrepancies (Ankit Sharma vs Priya Nair) across time (21:08 vs 21:15), location (rear vs front), and clothing (navy blue hoodie vs red jacket) are identified and distinguished from judicial resolution (`Contradiction identified: Yes`).
+- **Test B: Irrelevant Evidence Rejection**: Confirms `analyze_witness_contradictions` rejects alibi/cell tower records when witness statements are absent and reports insufficient evidence without hallucinating.
+- **Test C: Timeline Generation & Sufficiency**: Verifies timeline queries (`Give me the timeline of events`) pass the sufficiency gate on chronological judgment chunks and format sorted timestamps.
+- **Test D: Specialist Agent Disagreement Reconciliation**: Verifies `MultiAgentCoordinator.reconcile_analyses` resolves conflicting agent findings by cross-referencing authoritative court records.
+- **Test E: Out-of-Scope & Hypothetical Refusal**: Tests rejection of out-of-domain queries and isolation of standalone hypothetical questions.
+- **Test F: Citation Integrity**: Asserts that every cited source exists in the retrieved chunks with document name, page number, and chunk ID.
+- **Test G: Session Isolation**: Asserts that tools and agents bound to different cases do not bleed evidence or context.
+- **Test H: Workflow Execution Status & Diagnostics**: Verifies accurate stage states (`completed`, `skipped`, `failed`), timing, and chunk/document count metrics.
 
+Run the full automated test suite:
 ```bash
-python -m pip install "pydantic>=2,<3" pytest
-python -m pytest -q tests/test_multi_agent.py
+PYTHONPATH=. pytest -q tests/
+```
+
+Run the specific audit regression suite:
+```bash
+PYTHONPATH=. pytest -q tests/test_audit_fixes.py
+```
+
+Run the focused specialist-agent tests:
+```bash
+PYTHONPATH=. pytest -q tests/test_multi_agent.py
 ```
 
 Run the existing automated verification scripts:

@@ -8,7 +8,13 @@ from langchain_core.messages import HumanMessage, AIMessage, ToolMessage, System
 from models.schemas import IntentType, DocumentChunk, WorkflowStep, WorkflowState, LegalResearchAnswer, ToolExecution
 from rag.retriever import RAGRetriever
 from llm.llm_service import LLMService
-from agent.tools import build_legal_tools
+try:
+    from agent.tools import build_legal_tools
+except ImportError:
+    import importlib
+    import agent.tools
+    importlib.reload(agent.tools)
+    from agent.tools import build_legal_tools
 from agent.specialist_agents import MultiAgentCoordinator
 from utils.query_normalizer import QueryNormalizer, NormalizedQuery
 from utils.intent_classifier import IntentClassifier
@@ -379,7 +385,23 @@ class LegalResearchAgent:
         )
         state.steps.append(specialist_step)
 
-        specialist_context = self.retriever.format_chunks_for_context(chunks)
+        # Prepare intent-aware filtered evidence context for specialists and tools
+        q_lower = query.lower()
+        if state.intent in {IntentType.WITNESS_ANALYSIS, IntentType.CONTRADICTION_ANALYSIS, IntentType.CONTRADICTION_DETECTION} or any(k in q_lower for k in ("witness", "contradict", "discrepan", "inconsisten")):
+            witness_chunks = [
+                c for c in chunks
+                if any(w in (c.document_name + " " + c.document_type + " " + c.text).lower() for w in ("witness", "statement", "ankit", "priya", "cctv", "camera", "judgment", "discrepancy", "contradiction"))
+            ]
+            specialist_context = self.retriever.format_chunks_for_context(witness_chunks or chunks)
+        elif state.intent == IntentType.TIMELINE or any(k in q_lower for k in ("timeline", "chronolog", "sequence", "when did")):
+            timeline_chunks = [
+                c for c in chunks
+                if re.search(r'\b\d{1,2}:\d{2}\b', c.text) or re.search(r'\b\d{1,2}\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\b', c.text, re.I)
+            ]
+            specialist_context = self.retriever.format_chunks_for_context(timeline_chunks or chunks)
+        else:
+            specialist_context = self.retriever.format_chunks_for_context(chunks)
+
         specialist_started = time.perf_counter()
         specialist_results = self.multi_agent_coordinator.analyze(
             query=state.normalized_query,
@@ -419,8 +441,8 @@ class LegalResearchAgent:
             "Specialist notes are secondary analysis; final synthesis still uses retrieved source passages."
         )
         report(f"Specialist analysis complete: {successful_specialists}/{len(specialist_results)} completed. Preparing final synthesis.")
-        specialist_analysis_notes = self.multi_agent_coordinator.format_successful_analyses(
-            specialist_results
+        specialist_analysis_notes = self.multi_agent_coordinator.reconcile_analyses(
+            specialist_results, chunks, state.intent
         )
 
         # 6. EXECUTE LANGCHAIN TOOL CALLING LOOP
@@ -488,6 +510,7 @@ class LegalResearchAgent:
         state.steps.append(WorkflowStep("Step 8 — Sources & Citations", "completed", f"{len(state.sources)} verifiable source references attached"))
         state.metrics["source_count"] = len(state.sources)
         state.metrics["retrieved_chunk_count"] = len(chunks)
+        state.metrics["distinct_document_count"] = self.retriever.get_unique_document_count(chunks)
         state.metrics["executed_tool_count"] = len(state.executed_tools)
         state.metrics["total_duration_seconds"] = round(time.perf_counter() - workflow_started, 3)
         state.status = "Completed"

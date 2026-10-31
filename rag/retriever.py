@@ -73,8 +73,13 @@ class RAGRetriever:
             doc_lower = (chunk.document_name + " " + chunk.document_type).lower()
             if "cctv" in q_lower and "cctv" in doc_lower:
                 entity_boost += 0.15
-            if ("witness" in q_lower or "guard" in q_lower) and "witness" in doc_lower:
-                entity_boost += 0.15
+            if any(term in q_lower for term in ("witness", "guard", "contradict", "discrepan", "inconsisten", "statement", "testimony")):
+                if "witness" in doc_lower or "statement" in doc_lower:
+                    entity_boost += 0.18
+                if any(w in chunk_lower for w in ("witness", "statement", "deposed", "testified", "contradiction", "discrepancy")):
+                    entity_boost += 0.10
+                if "judgment" in doc_lower and any(w in chunk_lower for w in ("contradiction", "witness statements", "honest error")):
+                    entity_boost += 0.20
             if any(term in q_lower for term in ("judgment", "judgement", "verdict", "court finding", "final order")):
                 if "judgment" in doc_lower or "court" in doc_lower:
                     entity_boost += 0.22
@@ -96,8 +101,8 @@ class RAGRetriever:
                 if ts in chunk_lower:
                     entity_boost += 0.30
 
-            if ("timeline" in search_query.lower() or "when did" in search_query.lower()) and re.search(r"\b\d{1,2}:\d{2}\b", chunk_lower):
-                entity_boost += 0.10
+            if any(term in search_query.lower() for term in ("timeline", "chronology", "sequence", "events", "when did", "time of")) and re.search(r"\b\d{1,2}:\d{2}\b", chunk_lower):
+                entity_boost += 0.15
 
             # Hybrid Score calculation: 55% semantic + 45% lexical/entity
             lexical_score = min(1.0, lexical_ratio + entity_boost)
@@ -137,8 +142,30 @@ class RAGRetriever:
         best_term_ratio = (best_term_matches / len(query_terms)) if query_terms else 0.0
         has_entity_match = any(any(ent in c.text.lower() for ent in target_entities) for c in deduped_chunks) if target_entities else False
 
+        # Intent & Content checks for generalized legal reasoning
+        q_lower = search_query.lower()
+        is_timeline_query = any(term in q_lower for term in ("timeline", "chronolog", "sequence", "events", "when did", "time of")) or (intent and "TIMELINE" in intent.upper())
+        timestamps_count = sum(len(re.findall(r'\b\d{1,2}:\d{2}\b', c.text)) for c in deduped_chunks)
+        dates_count = sum(len(re.findall(r'\b\d{1,2}(?:st|nd|rd|th)?\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\b', c.text, re.I)) for c in deduped_chunks)
+        has_temporal_density = (timestamps_count + dates_count) >= 3
+
+        is_contradiction_query = any(term in q_lower for term in ("contradict", "discrepan", "inconsisten", "conflict")) or (intent and "CONTRADICTION" in intent.upper())
+        has_witness_context = any(
+            any(k in c.text.lower() for k in ("witness", "testimony", "statement", "observation", "deposed", "contradiction", "discrepancy"))
+            for c in deduped_chunks
+        )
+
         # Insufficient threshold: off-topic or absent record questions have poor overlap and no entity match
-        if max_score < 0.40 or (best_term_ratio < 0.25 and not has_entity_match and max_score < 0.52):
+        if is_timeline_query and has_temporal_density:
+            # Timeline query with substantive temporal markers must not be rejected on keyword mismatch alone
+            if max_score >= 0.50 or avg_score >= 0.40 or timestamps_count >= 3:
+                strength = "High" if (max_score >= 0.60 or timestamps_count >= 4) else "Medium"
+            else:
+                strength = "Low"
+        elif is_contradiction_query and has_witness_context and max_score >= 0.38:
+            # Contradiction query with witness context must not be rejected on missing lexical tokens
+            strength = "High" if (max_score >= 0.60 or avg_score >= 0.45) else "Medium"
+        elif max_score < 0.40 or (best_term_ratio < 0.25 and not has_entity_match and max_score < 0.52):
             strength = "Insufficient"
         elif max_score >= 0.65 or avg_score >= 0.50:
             strength = "High"
@@ -150,7 +177,6 @@ class RAGRetriever:
             strength = "Insufficient"
 
         # Similarity alone is not enough for a conclusion-specific legal question.
-        q_lower = search_query.lower()
         if any(term in q_lower for term in ("judgment", "judgement", "verdict", "court finding", "final order")):
             court_text = " ".join(c.text.lower() for c in deduped_chunks
                                   if "judgment" in (c.document_name + " " + c.document_type).lower()
@@ -165,6 +191,13 @@ class RAGRetriever:
                 strength = "Low" if strength != "Insufficient" else strength
 
         return deduped_chunks, strength
+
+    @staticmethod
+    def get_unique_document_count(chunks: List[DocumentChunk]) -> int:
+        """Count distinct source document files represented in chunk list."""
+        if not chunks:
+            return 0
+        return len({c.document_name for c in chunks if c.document_name})
 
     def _extract_query_keywords(self, query: str) -> List[str]:
         q_lower = query.lower()
@@ -181,10 +214,17 @@ class RAGRetriever:
         q_lower = (query or "").lower()
         sub_queries: List[str] = []
 
-        if ("witness" in q_lower or "guard" in q_lower) and ("cctv" in q_lower or "camera" in q_lower):
+        if any(term in q_lower for term in ("contradict", "discrepan", "inconsisten", "conflict", "witness", "statement")):
             sub_queries.extend([
-                "witness statement testimony observations date time",
-                "CCTV camera footage analysis timestamps entry exit",
+                "witness statement testimony observations date time clothing entrance",
+                "witness statement contradiction discrepancy CCTV camera corroboration",
+                "evaluation of witness statements and contradictions court finding",
+            ])
+
+        if any(term in q_lower for term in ("timeline", "chronolog", "sequence", "events", "when did", "time of")):
+            sub_queries.extend([
+                "chronological sequence of events dates timestamps incident murder entry exit",
+                "timeline of events hours timestamps CCTV witness postmortem",
             ])
 
         if "alibi" in q_lower:

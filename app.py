@@ -49,6 +49,10 @@ from rag.retriever import RAGRetriever
 from rag.evaluation import evaluate_retrieval, benchmark_retrieval, DEFAULT_LEGAL_EVALUATION_CASES
 from rag.benchmark import compare_llm_only_vs_rag
 from llm.llm_service import LLMService
+import agent.tools
+importlib.reload(agent.tools)
+import agent.specialist_agents
+importlib.reload(agent.specialist_agents)
 import agent.legal_research_agent
 importlib.reload(agent.legal_research_agent)
 from agent.legal_research_agent import LegalResearchAgent, is_standalone_hypothetical_query
@@ -685,6 +689,19 @@ html, body, .stApp, [data-testid="stAppViewContainer"],
 .pipeline-dot.completed {
     background: var(--green);
     box-shadow: 0 0 8px rgba(34,197,94,0.4);
+}
+.pipeline-dot.failed {
+    background: var(--red);
+    box-shadow: 0 0 8px rgba(239,68,68,0.4);
+}
+.pipeline-dot.skipped {
+    background: var(--text-muted);
+    box-shadow: 0 0 8px rgba(100,116,139,0.3);
+}
+.pipeline-dot.running {
+    background: var(--blue-primary);
+    box-shadow: 0 0 8px rgba(37,99,235,0.6);
+    animation: pulseGlow 1.5s ease-in-out infinite;
 }
 .pipeline-node.step-6 .pipeline-dot.completed {
     animation: pulseGlow 2s ease-in-out infinite 2.1s;
@@ -1517,7 +1534,16 @@ with tab_research:
         if state.validation_error:
             st.warning(f"Structured output validation: {state.validation_error}")
 
-        # Workflow Pipeline Visualization (Sequential Load Animation)
+        # Runtime metrics are measured by the workflow, not estimated.
+        runtime_metrics = getattr(state, "metrics", {}) or {}
+
+        # Workflow Pipeline Visualization (Sequential Load Animation with real states)
+        retrieval_status = "completed" if len(state.retrieved_chunks) > 0 else ("skipped" if is_standalone_hypothetical_query(state.query) else "failed")
+        evidence_status = "completed" if strength in {"High", "Medium"} else ("skipped" if strength == "User-provided hypothetical" else "failed" if strength == "Insufficient" else "completed")
+        specialist_count = int(runtime_metrics.get("specialist_agents_completed", 0))
+        specialist_status = "completed" if specialist_count > 0 else ("skipped" if (strength == "Insufficient" or is_standalone_hypothetical_query(state.query)) else "failed")
+        answer_status = "completed" if (ans and state.status == "Completed") else ("failed" if state.status == "Failed" else "skipped")
+
         st.html('<div class="section-label-blue">Agent Workflow Pipeline</div>')
         st.html(f"""
         <div class="pipeline-container">
@@ -1534,37 +1560,38 @@ with tab_research:
             </div>
             <div class="pipeline-connector conn-2"></div>
             <div class="pipeline-node step-3">
-                <div class="pipeline-dot completed"></div>
+                <div class="pipeline-dot {retrieval_status}"></div>
                 <div class="pipeline-label">Retrieval</div>
                 <div class="pipeline-value">{len(state.sources)} sources</div>
             </div>
             <div class="pipeline-connector conn-3"></div>
             <div class="pipeline-node step-4">
-                <div class="pipeline-dot completed"></div>
+                <div class="pipeline-dot {evidence_status}"></div>
                 <div class="pipeline-label">Evidence</div>
                 <div class="pipeline-value">{html.escape(strength)}</div>
             </div>
             <div class="pipeline-connector conn-4"></div>
             <div class="pipeline-node step-5">
-                <div class="pipeline-dot completed"></div>
-                <div class="pipeline-label">LLM</div>
-                <div class="pipeline-value">{html.escape(provider_choice.title())}</div>
+                <div class="pipeline-dot {specialist_status}"></div>
+                <div class="pipeline-label">Specialists</div>
+                <div class="pipeline-value">{specialist_count} active</div>
             </div>
             <div class="pipeline-connector conn-5"></div>
             <div class="pipeline-node step-6">
-                <div class="pipeline-dot completed"></div>
+                <div class="pipeline-dot {answer_status}"></div>
                 <div class="pipeline-label">Answer</div>
                 <div class="pipeline-value">{"Validated" if ans else "Raw"}</div>
             </div>
         </div>
         """)
 
-        # Runtime metrics are measured by the workflow, not estimated.
-        runtime_metrics = getattr(state, "metrics", {}) or {}
         metric_cols = st.columns(4)
         metric_cols[0].metric("Total runtime", f"{runtime_metrics.get('total_duration_seconds', 0):.2f}s")
-        metric_cols[1].metric("Retrieved chunks", int(runtime_metrics.get("retrieved_chunk_count", len(state.retrieved_chunks))))
-        metric_cols[2].metric("Agents completed", int(runtime_metrics.get("specialist_agents_completed", 0)))
+        retrieved_chunk_cnt = int(runtime_metrics.get("retrieved_chunk_count", len(state.retrieved_chunks)))
+        distinct_doc_cnt = int(runtime_metrics.get("distinct_document_count", len({c.document_name for c in state.retrieved_chunks})))
+        metric_cols[1].metric("Retrieved chunks", f"{retrieved_chunk_cnt} ({distinct_doc_cnt} docs)")
+        specialist_selected = int(runtime_metrics.get("specialist_agents_selected", 0))
+        metric_cols[2].metric("Agents completed", f"{specialist_count}/{specialist_selected}")
         metric_cols[3].metric("Citations", int(runtime_metrics.get("source_count", len(state.sources))))
 
         # Meta pills
