@@ -1,633 +1,691 @@
-# Crime Scene Investigation RAG — Legal Intelligence Platform ⚖️
+# Crime Scene Investigation RAG
 
-An advanced, AI-powered **Multi-Agent RAG (Retrieval-Augmented Generation)** application for legal case research, evidence synthesis, witness-testimony comparison, contradiction analysis, and timeline extraction.
+**A source-grounded, multi-agent legal case research assistant** built with Python, Streamlit, LangChain, Pydantic, ChromaDB/FAISS, and configurable LLM providers.
 
-The system retains the existing retrieval pipeline, LangChain tool-calling workflow, multi-provider LLM service, Pydantic response contract, and Streamlit UI. A new intent-aware coordinator delegates source-grounded analysis to focused specialist agents before final synthesis.
+The application ingests case records, retrieves relevant passages, routes a query to focused legal-analysis workflows, and returns structured findings with source references and explicit evidence limitations. Its purpose is legal-document research and investigation support—not autonomous legal decision-making or legal advice.
 
-> **Key Architectural Principle**: `LegalResearchAgent` remains the workflow coordinator. It normalizes and classifies a query, retrieves case evidence, delegates relevant analysis to specialist agents, and passes their findings to the existing structured-answer generation path. Original retrieved document chunks remain the primary source for citations.
-
-Built with **Python + Streamlit**, following the **AgenticAI Learning Architecture**:
-
-```text
-Streamlit UI
-    ↓
-LegalResearchAgent (Workflow Coordinator)
-├── Query Normalization & Intent Classification
-├── RAGRetriever → ChromaDB / FAISS Vector Store
-├── MultiAgentCoordinator
-│   ├── Timeline Analysis Agent
-│   ├── Witness & Contradiction Agent
-│   ├── Case Facts Agent
-│   └── Evidence Assessment Agent
-├── Existing LangChain Tool-Calling Loop
-├── LLMService → Ollama / Gemini / OpenAI
-└── Pydantic Validation (LegalResearchAnswer & SourceModel)
-    ↓
-WorkflowState → Streamlit Result UI + Session History
-```
-
-> **Disclaimer**: This system is an AI-assisted legal research tool. It provides information based on documents available in its knowledge base and does not constitute formal legal advice.
+> **Evidence principle:** retrieved case documents are the primary evidence. Specialist-agent text is supporting analysis, not an independent source. Allegations, witness observations, forensic estimates, defence claims, and judicial findings must remain distinct.
 
 ---
 
-## 1. Key Features & Experiment Upgrades
+## Contents
 
-### Experiment 3 — LangChain & Provider Integration
-- **LangChain Orchestration**: Powered by `langchain-core` and `ChatPromptTemplate` for dynamic legal research prompt formatting and chain execution.
-- **Multi-Provider LLM Support**:
-  - **Local Ollama**: Offline-first legal analysis powered by `qwen2.5:1.5b` (or custom local models) via `ChatOllama`.
-  - **Google Gemini**: Cloud reasoning integration via `gemini-1.5-flash` / `gemini-pro`.
-  - **OpenAI**: GPT-4o / GPT-3.5 support.
-- **Ollama Health Check & Structured Native Support**: Automatic background health probing with visual notifications, fallback handling, and native schema constraint enforcement for local models.
-
-### Experiment 4 — Structured Outputs & Session State
-- **Strict Pydantic Schema Validation**: Every output is schema-validated using Pydantic models (`LegalResearchAnswer` and `SourceModel`).
-- **Structured Legal Analytics**: Enforces breakdown into:
-  - Query Intent Classification (`CASE_SUMMARY`, `TIMELINE`, `WITNESS_ANALYSIS`, `CONTRADICTION_DETECTION`, `EVIDENCE_EVALUATION`, `LEGAL_SECTION_CHECK`, `GENERAL_RESEARCH`)
-  - Grounded Legal Answer
-  - Key Findings
-  - Evidence Breakdown
-  - Knowledge Base Limitations
-  - Verifiable Citation Sources (Document name, snippet, page number, relevance score)
-- **Persistent Session State History**: Full active-session conversation history tracking with interactive expanders and raw JSON inspection.
-- **History Control**: One-click clear session history functionality without wiping vector store indexes.
-
-
-### Experiment 7A — Legal Case RAG
-- **Document ingestion**: Retains PDF, DOCX, and TXT ingestion with document/page metadata.
-- **Legal-aware chunking**: Preserves legal headings and paragraph boundaries while applying configurable chunk size and overlap.
-- **Embeddings**: Uses the local Sentence-Transformers `all-MiniLM-L6-v2` model by default, with existing provider options retained.
-- **Vector database**: ChromaDB remains the default and preserves the existing `data/vectorstore` index. An optional persistent FAISS CPU backend is available through `VECTOR_STORE_BACKEND=faiss`.
-- **Transparent retrieval**: The Research diagnostics panel shows the actual retrieved excerpts, source file, page, chunk ID, and relevance score.
-- **Evidence-bounded generation**: The legal answer prompt requires claims to be supported by retrieved case passages. If the evidence gate finds no sufficient support, the workflow returns an explicit insufficient-information answer instead of asking the model to fill the gap.
-
-### Experiment 7B — Retrieval Evaluation & Benchmarking
-- The **RAG EVALUATION** tab accepts manually verified relevant filenames and/or chunk IDs.
-- Reports Precision@K, Recall@K, F1@K, hit rate, reciprocal rank, mean retrieval score, and retrieval time.
-- Displays the passages used for the retrieval evaluation so that relevance can be inspected.
-- Compares a direct LLM-only answer with the complete RAG workflow and reports retrieval-only and total RAG latency.
-- Single-run latency is diagnostic; repeat runs under comparable conditions before making performance claims.
-
-**Vector-store configuration**
-```env
-# Existing persistent ChromaDB index (default)
-VECTOR_STORE_BACKEND=chroma
-
-# Optional FAISS CPU index
-VECTOR_STORE_BACKEND=faiss
-```
-
-Install the standard dependencies with `python -m pip install -r requirements.txt`. To enable FAISS, install the optional dependency with `python -m pip install -r requirements-faiss.txt` (or install a compatible `faiss-cpu` build for your operating system). FAISS is kept optional so the existing ChromaDB setup remains installable without changing its dependency footprint. When switching backends, re-index the case documents into the selected backend; ChromaDB and FAISS maintain separate indexes. Keep the embedding model and its vector dimensions consistent for a given index.
-
-### Premium Dark-Themed User Experience
-- High-contrast, glassmorphism-inspired dark UI with custom typography (`Inter` & `JetBrains Mono`).
-- Interactive metrics dashboard displaying Knowledge Base statistics, Document counts, and Vector Chunk metrics.
-- Comprehensive document upload suite supporting PDF, DOCX, and TXT legal files with chunking preview and vector indexing.
-- One-click **Load Pre-packaged Synthetic Case Files** for instant zero-config demonstration.
-- **Interactive Query Understanding & Retrieval Diagnostics**: Expandable inspector revealing normalized queries, preprocessing transformations, classification confidence, hybrid relevance scores, and schema validation.
+- [Project overview](#project-overview)
+- [Capabilities](#capabilities)
+- [Architecture](#architecture)
+- [Repository layout](#repository-layout)
+- [Experiments and execution guide](#experiments-and-execution-guide)
+- [Installation](#installation)
+- [Run the application](#run-the-application)
+- [Evaluation methodology](#evaluation-methodology)
+- [Testing and CI](#testing-and-ci)
+- [Configuration](#configuration)
+- [Data and persistence](#data-and-persistence)
+- [Troubleshooting](#troubleshooting)
+- [Limitations and responsible use](#limitations-and-responsible-use)
 
 ---
 
-## 2. Problem Faced & How We Tackled It (Intelligent Query Understanding)
+## Project overview
 
-### The Problem Faced
-In real-world forensic and legal investigation scenarios, users rarely phrase questions using pristine textbook English and formal legal terminology. Instead, users frequently submit queries with:
-- **Typographical and spelling errors**: e.g., *"wht did the guard say n does cctv match it?"*, *"any diffrnce in witnes statemnts n camera?"*, *"acused aliby at blue dart cafe"*.
-- **Grammatical and tense errors**: e.g., *"when did he left the place?"*, *"did they saw the gun at the scene?"*, *"where was he went on 13th nov?"*.
-- **Informal English, shorthand, and slang**: e.g., *"did their stories match or not?"*, *"put everything in order by time"*, *"sum up the whole case"*, *"give me the tldr"*.
-- **Paraphrased questions without exact keywords**: e.g., *"can you reconstruct the sequence of incidents hour by hour?"*, *"highlight clashes between depositions"*.
-- **Ambiguous or underspecified inquiries**: e.g., *"what about that?"*, *"tell me about him"*, *"did it?"*.
-- **Out-of-domain or unrecorded queries**: e.g., *"Who won the 2024 FIFA World Cup in Qatar?"*.
+Traditional document search returns passages but leaves users to manually connect dates, compare witness accounts, locate forensic findings, and identify what a court ultimately held. This project combines retrieval-augmented generation (RAG) with intent-aware specialist analysis to make those research tasks more structured and inspectable.
 
-**Root Causes in the Previous Architecture**:
-1. *Brittle Routing*: Keyword-only checking defaulted any misspelled or paraphrased query to `GENERAL_LEGAL_RESEARCH`.
-2. *Degraded Retrieval*: Dense vector embeddings alone struggled on noisy text tokens and lacked exact legal entity boosts.
-3. *Threshold Leakage*: Cosine similarity hovered around ~0.25 even for off-topic questions, passing irrelevant chunks to the generator instead of classifying evidence as `"Insufficient"`.
-4. *Small LLM Tool Failure*: Local 1.5B models called specialized analysis tools without supplying evidence text arguments.
+### Core workflow
 
----
+1. A user uploads case documents or uses the bundled synthetic case records.
+2. The document loader extracts text and page/document metadata.
+3. A legal-aware splitter creates overlapping evidence chunks.
+4. An embedding service represents chunks and queries as vectors.
+5. A persistent vector store indexes the chunks.
+6. Query normalization and intent classification prepare the user's request.
+7. Hybrid retrieval gathers and reranks candidate evidence.
+8. The coordinator dispatches timeline, contradiction, case-facts, or evidence analysis as appropriate.
+9. Deterministic pipelines build source-linked timeline/contradiction records where those workflows apply.
+10. The LLM synthesis path produces a structured legal-research answer.
+11. Pydantic models validate the response contract and Streamlit displays findings, citations, workflow diagnostics, and session history.
 
-### How We Tackled the Problem
+### Main technologies
 
-#### 1. Dedicated Intelligent Query Normalizer (`utils/query_normalizer.py`)
-We created a lightweight, deterministic preprocessing layer that executes in **sub-10ms** without adding expensive LLM API calls:
-- **Spelling & Shorthand Correction**: Expands phonetic slang, contractions, and typos (`wht` $\rightarrow$ `what`, `n` $\rightarrow$ `and`, `diffrnce` $\rightarrow$ `difference`, `witnes statemnts` $\rightarrow$ `witness statements`).
-- **Grammar & Tense Agreement**: Normalizes grammatical errors (`when did he left` $\rightarrow$ `when did he leave`, `did they saw` $\rightarrow$ `did they see`).
-- **Strict Entity & Legal Preservation**: Preserves names (`Ramesh Kumar`, `Vikram Malhotra`, `Ankit Sharma`, `Priya Nair`), locations (`Apex Towers`, `Blue Dart Cafe`), legal statutes (`Section 302 IPC`, `FIR No. 142/2024`), evidence items (`Item-A`, `Item-C`), and timestamps (`21:10 HRS`, `21:25 HRS`).
-- **Ambiguity Detection**: Flags vague, underspecified questions and constructs targeted clarification prompts without attempting premature answer synthesis.
-
-#### 2. Multi-Signal Semantic Intent Classifier (`utils/intent_classifier.py` & `models/schemas.py`)
-- Employs weighted regex clusters, domain vocabularies, and cross-comparison patterns.
-- High-priority detection for contradiction analysis when comparing witness testimony against CCTV or physical evidence.
-- Computes confidence scores (0.0 to 1.0) and supports bidirectional enum alias equivalence (`CONTRADICTION_DETECTION` $\equiv$ `CONTRADICTION_ANALYSIS`, `EVIDENCE_EVALUATION` $\equiv$ `EVIDENCE_ANALYSIS`, `LEGAL_SECTION_CHECK` $\equiv$ `LEGAL_PROVISIONS`).
-
-#### 3. Hybrid RAG Retrieval & Calibrated Thresholds (`rag/retriever.py`)
-- **Hybrid Scoring**: Combines dense semantic similarity (55%) with lexical keyword and entity overlap (45%).
-- **Multi-Query Expansion**: Deconstructs cross-document comparisons (e.g., witness statements vs. CCTV logs) into parallel sub-queries and merges candidate pools.
-- **Timestamp & Entity Boosts**: Awards relevance boosts when chunks match exact timestamps (e.g., `21:25 HRS`) and case entities.
-- **Calibrated Anti-Hallucination Threshold**: Strict `"Insufficient"` evidence categorization for queries lacking case grounding, preventing synthetic hallucinations on out-of-domain questions.
-
-#### 4. Active Evidence Context Buffering (`agent/tools.py`)
-- Tools like `extract_timeline_events` and `analyze_witness_contradictions` automatically pull from active retrieved context if local models call them with empty string arguments.
-
-#### 5. Enriched Grounded Prompting (`prompts/legal_research_prompt.py`)
-- The answering prompt receives both the **original user query** and the **normalized research query**, detected intent, and explicit instructions to separate physical facts from witness testimony and analytical inferences.
-
-#### 6. Comprehensive 39-Prompt Evaluation Suite (`tests/test_query_understanding.py`)
-- Added an automated test suite across 8 query variations demonstrating a **+64.1% improvement** in intent classification accuracy.
+| Layer | Technology |
+|---|---|
+| User interface | Streamlit |
+| Application language | Python |
+| Agent orchestration | `LegalResearchAgent`, `MultiAgentCoordinator`, LangChain tool interfaces |
+| LLM providers | Ollama, Gemini, OpenAI; deterministic local fallback |
+| Embeddings | Sentence-Transformers (`all-MiniLM-L6-v2`) by default; optional Gemini/OpenAI embeddings |
+| Vector database | ChromaDB by default; optional FAISS CPU backend |
+| Structured data | Pydantic |
+| Document ingestion | pypdf, python-docx, TXT/text readers |
+| Automated checks | pytest, compileall, GitHub Actions |
 
 ---
 
-### Quantitative Evaluation Benchmark (Before vs. After)
+## Capabilities
 
-Tested across 39 realistic prompts covering all challenge variations:
-
-| Evaluation Metric | Baseline Pipeline | Improved Pipeline | Gain / Impact |
-| :--- | :---: | :---: | :---: |
-| **Intent Classification Accuracy** | 35.9% | **100.0%** | **+64.1% Absolute Gain** |
-| • *Spelling Mistakes* | 0.0% | **100.0%** | +100.0% Gain |
-| • *Grammatical Errors* | 40.0% | **100.0%** | +60.0% Gain |
-| • *Informal English & Slang* | 28.6% | **100.0%** | +71.4% Gain |
-| • *Paraphrased Questions* | 0.0% | **100.0%** | +100.0% Gain |
-| • *Ambiguous Questions* | 0.0% | **100.0%** | +100.0% Gain |
-| **Retrieval Relevance & Coverage** | 71.8% | **100.0%** | **+28.2% Gain** |
-| **Pydantic Schema Validity** | 100.0% | **100.0%** | **100% Reliable** |
-| **Anti-Hallucination Rate** | 25.0% | **87.2%** | **+62.2% Gain** |
-| **Average Preprocessing Latency** | N/A | **0.009s** | **Negligible Overhead** |
-
----
-
-## 2. Multi-Agent Architecture
-
-The multi-agent branch keeps `LegalResearchAgent` as the coordinator and adds a limited set of focused analysis agents. The specialists share the evidence already retrieved by `RAGRetriever`; they do not independently rebuild or re-index the knowledge base.
-
-```text
-User Query
-    ↓
-Normalize Query + Classify Intent
-    ↓
-Retrieve Source Evidence (RAGRetriever + ChromaDB)
-    ↓
-MultiAgentCoordinator
-    ├── Timeline Analysis Agent
-    ├── Witness & Contradiction Agent
-    ├── Case Facts Agent
-    └── Evidence Assessment Agent
-    ↓
-Existing Tool-Calling Workflow (when relevant)
-    ↓
-Structured Answer Synthesis + Pydantic Validation
-    ↓
-WorkflowState → Streamlit UI
-```
-
-The coordinator selects specialists according to the existing `IntentType`. Their analyses are secondary reasoning aids: the final answer is still grounded in retrieved source passages, and the Pydantic `LegalResearchAnswer` schema and UI contract remain in place. A specialist-provider failure is recorded in workflow steps and does not, by itself, prevent the original answer-generation path from running.
+- **Case-file ingestion:** PDF, DOCX/DOC, TXT, Markdown, and log/text files through the document loader.
+- **Legal-aware chunking:** document/page metadata, logical section boundaries, configurable chunk size, and overlap.
+- **Hybrid evidence retrieval:** semantic similarity combined with lexical terms and entity/topic boosts, multi-query expansion, deduplication, and document diversity.
+- **Query understanding:** normalization, spelling/shorthand handling, ambiguity detection, and intent classification.
+- **Intent-specific research:** case summary/facts, accused information, timeline, witness and contradiction analysis, evidence assessment, court findings, and legal-provision research.
+- **Structured timeline extraction:** date/time anchors, time ranges, event categories, source chunk/document IDs, supporting quotations, duplicate merging, chronological ordering, and provenance validation.
+- **Contradiction analysis:** extracts witness claims, compares factual details, identifies corroborating physical/electronic evidence, and records how the court treated a discrepancy.
+- **Multi-agent analysis:** selects focused specialists for the classified intent; specialist failures are recorded without automatically destroying the primary answer path.
+- **Evidence-aware output:** Pydantic answer and source schemas, findings, limitations, and source snippets.
+- **Retrieval diagnostics:** inspect retrieved passages and evaluate relevance against manually supplied filenames or chunk IDs.
+- **Latency comparison:** compare direct LLM generation with the complete RAG workflow.
+- **Session history:** inspect prior research outputs within the active Streamlit session.
+- **Synthetic demonstration case:** bundled sample records for reproducible local exploration.
 
 ---
 
-## 3. Role of LegalResearchAgent
+## Architecture
 
-The `LegalResearchAgent` ([`agent/legal_research_agent.py`](file:///Users/sathwiknaag/Desktop/%20/Projects/RAG%20Agentic%20Ai/agent/legal_research_agent.py)) is the **brain and coordinator of the application**. Rather than directly implementing every operation itself, it orchestrates the workflow by delegating specialized tasks to supporting services.
-
-### Core Responsibilities:
-1. **Receives User Query**: Accepts raw legal research queries from the Streamlit UI.
-2. **Classifies Intent**: Determines query category (`CASE_SUMMARY`, `TIMELINE`, `WITNESS_ANALYSIS`, `CONTRADICTION_DETECTION`, etc.) using keyword heuristics and LLM prompt context.
-3. **Determines Workflow Strategy**: Chooses chunk retrieval limits ($Top-K$) and context formatting based on query intent.
-4. **Calls RAG Retriever**: Invokes `RAGRetriever` to pull relevant legal evidence chunks and relevance scores from ChromaDB.
-5. **Constructs Context & Prompt**: Passes retrieved evidence chunks and intent context to `legal_research_prompt.py` to build LangChain `ChatPromptTemplate` instances.
-6. **Invokes LLM Service**: Calls `LLMService` to execute inference across Ollama, Gemini, or OpenAI.
-7. **Receives Structured JSON**: Obtains JSON formatted output adhering to legal analysis guidelines.
-8. **Validates Output Schema**: Parses and validates raw JSON against the `LegalResearchAnswer` Pydantic model.
-9. **Handles Validation Failures**: Triggers fallback strategies or retry logs when output fails schema validation.
-10. **Returns Workflow State**: Packs structured answer, intent, source citations, and timing metrics into a `WorkflowState` object for `app.py`.
-11. **Enables UI Rendering**: Allows Streamlit to render structured cards and store active session state history.
-
-```text
-LegalResearchAgent
-├── Intent Classification
-├── Evidence Retrieval
-├── Prompt/Context Construction
-├── LLM Invocation
-├── Structured Output Validation
-└── Final Workflow State Assembly
-```
-
----
-
-## 4. Agent Reasoning → Planning → Action Workflow
-
-The architecture implements a practical **Reasoning → Planning → Action → Validation → Response** agentic workflow loop:
-
-```text
-User Request: "What contradictions exist between witness statements and CCTV footage?"
-    ↓
-[Reasoning]
-Identify query intent as CONTRADICTION_DETECTION requiring comparison between witness statements and CCTV analysis reports.
-    ↓
-[Planning]
-Determine that relevant witness depositions and CCTV log chunks must be retrieved from ChromaDB, combined into context, and analyzed for timestamp/location discrepancies.
-    ↓
-[Action]
-Execute RAGRetriever query, obtain top-K evidence chunks, construct legal research prompt, and invoke selected LLM via LLMService.
-    ↓
-[Validation]
-Parse raw LLM output against Pydantic LegalResearchAnswer schema to ensure structured fields (grounded answer, key findings, evidence summary, limitations, sources) are present and valid.
-    ↓
-[Response]
-Return populated WorkflowState object to Streamlit app.py for interactive card rendering and session state tracking.
-```
-
----
-
-## 5. Complete Query Execution Flow
-
-```text
-User Query
-    ↓
-app.py (Streamlit UI)
-    ↓
-LegalResearchAgent.run_workflow(query)
-    ↓
-Intent Classification (IntentType)
-    ↓
-RAGRetriever (Relevance scoring & filtering)
-    ↓
-VectorStoreManager / ChromaDB (Top-K vector lookup)
-    ↓
-Top-K Relevant Evidence Chunks
-    ↓
-legal_research_prompt.py (LangChain ChatPromptTemplate)
-    ↓
-LLMService (Unified manager for Ollama / Gemini / OpenAI)
-    ↓
-Ollama / Gemini / OpenAI LLM Inference
-    ↓
-Structured JSON Response
-    ↓
-LegalResearchAnswer Pydantic Schema Validation
-    ↓
-WorkflowState Object Assembly
-    ↓
-app.py (Render interactive UI cards & save to st.session_state)
-```
-
-### Flow Breakdown:
-1. **User Query Submission**: User submits a legal query via `app.py`.
-2. **Agent Entry Point**: `app.py` passes the query to `LegalResearchAgent.run_workflow(query)`.
-3. **Intent Classification**: Agent categorizes query intent (`CASE_SUMMARY`, `CONTRADICTION_DETECTION`, etc.).
-4. **Vector Retrieval**: `RAGRetriever` queries `VectorStoreManager` (ChromaDB) to fetch top-K evidence chunks.
-5. **Prompt Formatting**: `legal_research_prompt.py` formats chunks and query into a LangChain `ChatPromptTemplate`.
-6. **LLM Execution**: `LLMService` sends formatted prompt to active provider (Ollama, Gemini, or OpenAI).
-7. **Schema Validation**: Raw response is validated against Pydantic `LegalResearchAnswer` schema.
-8. **State Construction**: Agent encapsulates result, citations, and metadata into a `WorkflowState` object.
-9. **UI & History Rendering**: `app.py` renders interactive result cards, citation expanders, and session history logs.
-
----
-
-## 6. Agent vs. Supporting Components
-
-| Component | Is it an Agent? | Responsibility |
-| :--- | :---: | :--- |
-| **`LegalResearchAgent`** | Coordinator | Owns the workflow, intent classification, retrieval, specialist delegation, tool calling, and final state packaging. |
-| **`MultiAgentCoordinator`** | Coordinator | Selects specialists by intent, executes them on shared retrieved evidence, and aggregates successful findings. |
-| **`TimelineAnalysisAgent`** | Specialist agent | Extracts supported events and preserves conflicting timestamps. |
-| **`WitnessContradictionAgent`** | Specialist agent | Compares witness, CCTV, forensic, and other supplied evidence for discrepancies. |
-| **`CaseFactsAgent`** | Specialist agent | Summarizes relevant facts while distinguishing allegations, observations, and findings. |
-| **`EvidenceAssessmentAgent`** | Specialist agent | Identifies directly supported claims, inference, conflicting evidence, and unknowns. |
-| **`RAGRetriever`** | No | Performs similarity searches and calculates chunk relevance scores. |
-| **`VectorStoreManager`** | No | Manages persistent ChromaDB vector collections and embeddings index. |
-| **`EmbeddingService`** | No | Generates text vector embeddings via Sentence-Transformers / HuggingFace. |
-| **`LLMService`** | No | Provides unified multi-provider interface (Ollama, Gemini, OpenAI). |
-| **`LegalTextSplitter`** | No | Chunks legal documents respecting section boundaries and chunk overlaps. |
-| **`DocumentLoader`** | No | Extracts raw text and metadata from PDF, DOCX, and TXT legal files. |
-| **Pydantic Schemas** | No | Validates JSON structure (`LegalResearchAnswer`, `SourceModel`). |
-| **Streamlit `app.py`** | No | Web user interface, input forms, metric displays, and session history management. |
-
----
-
-## 7. Concrete Example Execution
-
-### Example Query:
-> *"What contradictions exist between witness statements and CCTV footage regarding the timeline?"*
-
-```text
-1. User submits query in Streamlit interface.
-2. LegalResearchAgent receives query.
-3. Agent identifies intent -> CONTRADICTION_DETECTION.
-4. RAGRetriever searches ChromaDB collection for witness statements and CCTV log chunks.
-5. Relevant chunks (e.g., Security Guard Ankit Sharma's statement vs. CCTV Exit Log) are retrieved.
-6. LangChain prompt builder constructs legal research context prompt.
-7. Selected LLM (e.g., Ollama qwen2.5:1.5b) processes context and generates structured JSON response.
-8. Pydantic validates response against LegalResearchAnswer schema.
-9. Agent packages output into WorkflowState.
-10. Streamlit renders:
-    - Grounded Legal Answer (pointing out timestamp discrepancies)
-    - Key Findings (e.g., CCTV shows exit at 21:40 HRS vs. witness statement claiming 21:55 HRS)
-    - Evidence Breakdown (bulleted list of conflicting exhibits)
-    - Knowledge Base Limitations
-    - Verifiable Source Citations with document names and page numbers
-```
-
----
-
-## 8. Why a Coordinated Multi-Agent Architecture?
-
-Legal case research benefits from focused analyses over the same evidence. A timeline specialist can preserve event order and timestamp disagreements; a witness-and-contradiction specialist can compare statements with CCTV or forensic records; a case-facts specialist can keep allegations distinct from findings; and an evidence-assessment specialist can identify support, inference, and gaps.
-
-`MultiAgentCoordinator` routes work using the project's existing `IntentType` rather than launching every specialist for every query. The specialists receive the source excerpts already retrieved by `RAGRetriever`, which avoids redundant searches and keeps the evidence boundary explicit.
-
-```text
-LegalResearchAgent (Coordinator)
-    |
-    +--> MultiAgentCoordinator
-             |
-             +--> Timeline Analysis Agent
-             +--> Witness & Contradiction Agent
-             +--> Case Facts Agent
-             +--> Evidence Assessment Agent
-    |
-    +--> Existing Tool-Calling Loop (when relevant)
-    |
-    +--> LLMService Structured Synthesis
-    |
-    +--> Pydantic LegalResearchAnswer + Source Citations
-```
-
-This is a controlled delegation workflow rather than an unrestricted agent swarm. Specialist outputs are labelled as secondary analysis and appended to the synthesis context; final citations continue to come from the original retrieved chunks. If a specialist call fails, the failure is recorded in `WorkflowState.steps` and the primary RAG response path can continue. The repository's deterministic `local` fallback skips LLM-backed specialists because it is not a generative model.
-
----
-
-## 9. Agentic Tool Calling Architecture (Advanced Experiment 6B Integration)
-
-The platform is upgraded with a dynamic **LangChain Tool-Calling Architecture**. Instead of relying on hardcoded keyword routing or rigid if-else blocks (such as `if "attendance" in question`), the system uses LLM tool binding (`llm.bind_tools(tools)`). The LLM dynamically inspects query requirements, selects the appropriate tool, generates arguments, receives execution results via `ToolMessage`, and synthesizes a grounded answer.
+### High-level system architecture
 
 ```mermaid
 flowchart TD
-    A[User Question] --> B[Router / Intent Classification]
-    B --> C[LegalResearchAgent]
-    C --> D[LLM with Bound Tools - llm.bind_tools]
-    D --> E{Tool Required?}
-
-    E -->|No| F[Direct Response / JSON Generation]
-    E -->|Yes| G[Select Tool from TOOLS_BY_NAME]
-    
-    subgraph Registered LangChain Tools
-        G --> T1[retrieve_case_evidence - RAG Tool]
-        G --> T2[extract_timeline_events]
-        G --> T3[analyze_witness_contradictions]
-        G --> T4[summarize_case_facts]
-        T1 --> VectorStore[(ChromaDB Vector Store)]
-    end
-
-    T1 --> H[Execute Selected Tool Action]
-    T2 --> H
-    T3 --> H
-    T4 --> H
-
-    H --> I[Capture Result in ToolMessage]
-    I --> D
-    F --> J[Pydantic Schema Validation - LegalResearchAnswer]
-    J --> K[Streamlit UI + Session State]
+    U[User] --> UI[Streamlit app.py]
+    UI --> LA[LegalResearchAgent]
+    LA --> N[QueryNormalizer]
+    N --> I[IntentClassifier]
+    I --> R[RAGRetriever]
+    R --> VS[(ChromaDB / FAISS)]
+    R --> EB[Retrieved DocumentChunks]
+    EB --> ROUTE{Intent dispatch}
+    ROUTE -->|Timeline| TP[TimelinePipeline]
+    ROUTE -->|Contradiction / Witness| CP[ContradictionPipeline]
+    ROUTE -->|Other supported intent| MC[MultiAgentCoordinator]
+    TP --> TE[Validated TimelineExtractionResult]
+    CP --> CE[ContradictionAnalysisResult]
+    MC --> SA[Selected Specialist Agents]
+    TE --> SYN[Structured Answer Synthesis]
+    CE --> SYN
+    SA --> SYN
+    EB --> SYN
+    SYN --> PV[Pydantic validation]
+    PV --> WS[WorkflowState]
+    WS --> UI
 ```
 
-### Key Architectural Concepts:
-1. **What a Tool is**: A decorated Python function (`@tool` from `langchain_core.tools`) with type annotations and precise docstrings explaining when and how it should be used.
-2. **Why the Project uses Tools**: Allows the LLM to autonomously trigger RAG retrieval (`retrieve_case_evidence`), timeline extraction (`extract_timeline_events`), witness contradiction cross-examination (`analyze_witness_contradictions`), or FIR summaries (`summarize_case_facts`) based on query intent.
-3. **RAG as a Tool**: `retrieve_case_evidence` exposes the persistent ChromaDB RAG vector store directly as an LLM tool. When context is needed, the model calls this tool dynamically.
-4. **Tool Registration**: Registered in `agent/tools.py` in `LEGAL_TOOLS` and indexed in `TOOLS_BY_NAME`.
-5. **How `bind_tools()` Works**: Attaches tool JSON schemas directly to `ChatOllama` / `ChatOpenAI` chat models so the LLM outputs `response.tool_calls`.
-6. **How the LLM Selects a Tool**: The LLM reads the system prompt and tool descriptions to select tools dynamically without hardcoded keyword rules.
-7. **Tool Execution Loop**: `LegalResearchAgent` iterates up to `MAX_TOOL_ITERATIONS = 5`:
-   - Inspects `response.tool_calls`
-   - Maps `tool_name` to `TOOLS_BY_NAME`
-   - Executes the tool with `tool_args`
-   - Returns a `ToolMessage(content=result, tool_call_id=tool_id)` to the message history
-8. **Error Handling**: Graceful fallback handling for unknown tools or execution failures without exposing raw stack traces to the user.
-9. **UI Visualization**: Streamlit dashboard features an expandable **EXECUTED AGENT TOOLS** card showing invoked tool names, arguments, execution status, and result previews.
+### Component responsibilities
 
----
+| Component | Responsibility |
+|---|---|
+| `app.py` | Streamlit interface, provider selection, file upload/indexing, research, history, and evaluation tabs |
+| `LegalResearchAgent` | Owns request lifecycle, normalization, intent classification, retrieval, dispatch, synthesis, validation, and workflow metrics |
+| `QueryNormalizer` | Normalizes noisy queries and flags underspecified requests while preserving named entities |
+| `IntentClassifier` | Assigns an `IntentType` and confidence using intent patterns and query context |
+| `RAGRetriever` | Performs expanded candidate search, hybrid scoring, entity/topic boosts, deduplication, and evidence-strength assessment |
+| `VectorStoreManager` | Persists and searches embedded chunks in ChromaDB or optional FAISS |
+| `MultiAgentCoordinator` | Selects and invokes relevant specialist agents, records failures, and reconciles specialist outputs against source evidence |
+| `TimelinePipeline` | Bundles timeline-relevant chunks, extracts structured events, verifies source support, sorts events, and formats a timeline |
+| `ContradictionPipeline` | Extracts witness claims, compares accounts, identifies corroborating evidence, and records court resolution separately |
+| `LLMService` | Abstracts configured model/provider inference and structured response generation |
+| `models/schemas.py` | Shared intent, chunk, timeline, contradiction, source, answer, tool, and workflow data contracts |
 
-## 10. System Architecture Diagram
+### Agent roles
+
+The application uses a **coordinator-led, intent-routed architecture**. Specialist agents are not independent RAG systems and do not independently index or retrieve their own knowledge bases. They analyze evidence supplied by the coordinator.
+
+| Agent | Typical responsibility |
+|---|---|
+| Timeline Analysis Agent | Chronology and event attribution |
+| Witness & Contradiction Agent | Compare witness statements and identify factual discrepancies |
+| Case Facts Agent | Summarize relevant case facts with procedural-role attribution |
+| Evidence Assessment Agent | Assess support, corroboration, conflict, and remaining gaps |
+
+The deterministic timeline and contradiction pipelines are separate from free-form specialist prose. The final answer should rely on structured pipeline results and original retrieved passages where those workflows are dispatched.
+
+### Timeline workflow
 
 ```mermaid
 flowchart TD
-    User([User Query]) --> UI[Streamlit UI - app.py]
-    UI --> Coordinator[LegalResearchAgent - Workflow Coordinator]
-    Coordinator --> Normalize[Query Normalization]
-    Normalize --> Intent[Intent Classification]
-    Intent --> Retrieve[RAGRetriever]
-    Retrieve --> Store[(ChromaDB Vector Store)]
-    Store --> Evidence[Retrieved Source Chunks]
-    Evidence --> Specialists[MultiAgentCoordinator]
-    Specialists --> Timeline[Timeline Analysis Agent]
-    Specialists --> Witness[Witness and Contradiction Agent]
-    Specialists --> Facts[Case Facts Agent]
-    Specialists --> Assessment[Evidence Assessment Agent]
-    Timeline --> Findings[Specialist Findings]
-    Witness --> Findings
-    Facts --> Findings
-    Assessment --> Findings
-    Evidence --> Synthesis[LLMService Structured Synthesis]
-    Findings --> Synthesis
-    Coordinator --> Tools[Existing LangChain Tool-Calling Loop]
-    Tools --> Evidence
-    Synthesis --> Schema[Pydantic LegalResearchAnswer]
-    Schema --> State[WorkflowState]
-    State --> UI
+    A[Retrieved chunks] --> B[Build evidence bundle]
+    B --> C[Select temporal/event-bearing chunks]
+    C --> D[Deduplicate and enforce context budget]
+    D --> E[Record selected/excluded chunk IDs]
+    E --> F[Extract timestamp-anchored sentences]
+    F --> G[Normalize dates/times and classify event]
+    G --> H[Merge duplicate events and sort]
+    H --> I[Verify supporting quote against source chunk]
+    I --> J{Enough valid events?}
+    J -->|Yes| K[Timeline table + provenance]
+    J -->|No| L[Insufficient evidence result]
 ```
+
+Timeline records use the `TimelineEvent` schema, including date/time fields, event description, actors, event classification, source chunk/document IDs, supporting quote, certainty, and confidence. The evidence bundle records selected chunks, excluded chunks and reasons, total chunks considered, and context length. The current bundle builder has a configurable 32,000-character default budget; exclusions are recorded in the returned metadata.
+
+### Contradiction workflow
+
+```mermaid
+flowchart TD
+    A[Retrieved case chunks] --> B[Intent-specific evidence selection]
+    B --> C[Extract witness claims]
+    C --> D[Compare time, location, attire, actions, identification]
+    D --> E[Find physical/electronic corroboration]
+    E --> F[Read relevant court resolution]
+    F --> G[Structured comparison + source references]
+    G --> H[Final synthesis]
+```
+
+A factual discrepancy and its legal significance are different questions. CCTV or a court's explanation may corroborate one account or explain why a discrepancy was treated as an honest error; it does not make the original statements identical. The pipeline preserves the factual comparison and the judicial treatment as separate fields.
+
+### Retrieval scoring (implementation overview)
+
+The retriever obtains a candidate pool from the vector store, expands selected queries, then combines semantic similarity with lexical/entity signals. The implementation's hybrid score uses a 55% semantic and 45% lexical/entity weighting, followed by deduplication and document-diversity selection. These are implementation weights, not a claim that retrieval quality is 55%/45% or that a benchmark has achieved a specific accuracy.
+
+### Structured response contract
+
+The primary response schema is `LegalResearchAnswer`. It contains the original and normalized query, detected intent, answer, key findings, evidence summary, limitations, cited source models, and optional structured timeline events or contradiction comparisons. Workflow diagnostics are carried by `WorkflowState`.
 
 ---
 
-## 11. Directory & File Structure
+## Repository layout
 
 ```text
-RAG Agentic Ai/
-├── app.py                     # Streamlit Legal Intelligence Dashboard & Chat UI
-├── config.py                  # Environment, paths, chunking & LLM configurations
-│
+.
+├── app.py                         # Streamlit interface and evaluation tabs
+├── config.py                      # Paths and default runtime configuration
+├── .env.example                   # Environment variable template
+├── requirements.txt               # Main pinned dependency set
+├── requirements-faiss.txt         # Optional FAISS dependency
 ├── agent/
-│   ├── __init__.py
-│   ├── legal_research_agent.py # Workflow coordinator + existing retrieval/tool/synthesis path
-│   └── specialist_agents.py    # Intent-routed timeline, witness, facts and evidence specialists
-│
-├── rag/
-│   ├── __init__.py
-│   ├── document_loader.py     # PDF, DOCX & TXT Document Loaders
-│   ├── text_splitter.py       # Legal-Aware Text Splitter / Chunker
-│   ├── embeddings.py          # HuggingFace & Sentence-Transformer Embeddings
-│   ├── vector_store.py        # Persistent ChromaDB Manager & Collection Indexer
-│   └── retriever.py           # RAG Retriever & Relevance Scorer
-│
+│   ├── legal_research_agent.py    # Main workflow coordinator
+│   ├── specialist_agents.py       # Intent-routed specialist agents
+│   ├── timeline_pipeline.py       # Structured timeline pipeline
+│   ├── contradiction_pipeline.py  # Witness contradiction pipeline
+│   └── tools.py                   # Request-scoped LangChain tools
 ├── llm/
-│   ├── __init__.py
-│   └── llm_service.py         # Multi-provider LLM Manager (Ollama, Gemini, OpenAI)
-│
-├── prompts/
-│   ├── __init__.py
-│   └── legal_research_prompt.py # LangChain ChatPromptTemplates for legal analysis
-│
+│   └── llm_service.py             # Provider abstraction
 ├── models/
-│   ├── __init__.py
-│   └── schemas.py             # Pydantic Schemas (LegalResearchAnswer, SourceModel, IntentType)
-│
+│   └── schemas.py                 # Pydantic schemas and workflow data models
+├── prompts/
+│   └── legal_research_prompt.py   # Legal research prompts
+├── rag/
+│   ├── document_loader.py         # PDF/DOCX/TXT ingestion
+│   ├── text_splitter.py           # Legal-aware chunking
+│   ├── embeddings.py              # Embedding providers
+│   ├── vector_store.py             # ChromaDB / FAISS persistence
+│   ├── retriever.py                # Hybrid retrieval
+│   ├── evaluation.py               # Labelled retrieval metrics
+│   └── benchmark.py                # Direct LLM vs RAG latency comparison
 ├── utils/
-│   ├── __init__.py
-│   ├── helpers.py             # Formatting, JSON conversion, and utility functions
-│   ├── query_normalizer.py    # Preprocessing, typo correction, entity preservation & ambiguity detection
-│   └── intent_classifier.py   # Multi-signal semantic intent classification engine
-│
-├── tests/
-│   ├── test_query_understanding.py # 39-prompt evaluation suite (Baseline vs. Improved metrics)
-│   └── test_multi_agent.py          # Specialist routing and failure-handling tests
-│
-├── sample_data/               # Complete Synthetic Criminal Case Legal Dataset (State vs. Ramesh)
-│   ├── 01_FIR_State_vs_Ramesh.txt
-│   ├── 02_Witness_Statements.txt
-│   ├── 03_CCTV_Analysis_Report.txt
-│   ├── 04_Forensic_Lab_Report.txt
-│   ├── 05_Postmortem_Report.txt
-│   ├── 06_Police_Investigation_Report.txt
-│   ├── 07_Accused_Statement.txt
-│   └── 08_Court_Judgment.txt
-│
-├── data/
-│   ├── documents/             # Uploaded raw case files
-│   └── vectorstore/           # Persistent ChromaDB database
-│
-├── scratch/                   # Test, verification, and data generation scripts
-│   ├── test_pipeline.py                  # Pipeline & Pydantic validation test suite
-│   ├── generate_synthetic_dataset.py     # Generator for realistic 8-document legal case files
-│   └── verify_ollama_structured_output.py# Automated verification test for Ollama structured output
-│
-├── .env.example               # Example environment variable configurations
-├── .gitignore                 # Git ignore rules
-├── requirements.txt           # Project dependencies
-└── README.md                  # Project documentation
+│   ├── query_normalizer.py        # Query cleanup and ambiguity handling
+│   └── intent_classifier.py       # Intent classification
+├── sample_data/                    # Bundled synthetic case documents
+├── tests/                          # Deterministic and regression tests
+├── docs/
+│   └── MULTI_AGENT_MIGRATION.md   # Multi-agent migration notes
+└── .github/workflows/
+    └── multi-agent-checks.yml      # Automated syntax and pytest checks
 ```
 
 ---
 
-## 11. Synthetic Case Dataset: *State of Maharashtra vs. Ramesh Kumar*
+## Experiments and execution guide
 
-The platform includes a complete, realistic multi-document criminal case file in `sample_data/` covering:
-1. **First Information Report (FIR No. 142/2024)**: Incident report from Apex Towers murder case under IPC 302/392/120B / BNSS.
-2. **Witness Statements**: Detailed depositions from Security Guard Ankit Sharma, Receptionist Priya Verma, Accountant Suresh Joshi, and Alibi Witness Sunita Kumar.
-3. **CCTV Analysis Report**: Camera logs and timestamped entrance/exit footage details.
-4. **Forensic Lab Report**: Fingerprint identification, 9mm ballistics analysis, bloodstain DNA profiling, and digital audit ledger analysis.
-5. **Postmortem Examination Report**: Cause of death, gunshot wound trajectory, and estimated time of death (21:15 - 21:45 HRS).
-6. **Police Investigation & Charge Sheet**: Investigation summary, motives, timeline reconstruction, and recovery of stolen briefcase.
-7. **Accused Statement (Section 313 Cr.P.C.)**: Defence plea of innocent alibi and financial dispute context.
-8. **Court Judgment & Verdict**: Judicial assessment of circumstantial evidence, chain of custody, witness reliability, and conviction order.
+The experiments below describe the implementation and the intended way to run/evaluate each capability. **Automated test success is not the same as a live LLM quality result.** Tests using mocks validate deterministic logic and contracts; live-provider measurements must be run with the selected provider, model, machine, and dataset recorded.
+
+### Experiment 1 — Document ingestion and legal-aware chunking
+
+**Objective:** transform source files into page-aware chunks suitable for retrieval without losing document identity.
+
+**Implementation:** `rag/document_loader.py`, `rag/text_splitter.py`, and the upload/indexing flow in `app.py`.
+
+**Execution:**
+1. Start the application (see [Run the application](#run-the-application)).
+2. Open **CASE FILES**.
+3. Upload one or more PDF, DOCX, or TXT files.
+4. Review the ingestion/indexing result and indexed-document/chunk counts.
+5. Open **RESEARCH** and inspect retrieved chunk IDs, filenames, page metadata, and excerpts through the diagnostics panels.
+
+**Parameters:** `DEFAULT_CHUNK_SIZE=1000` and `DEFAULT_CHUNK_OVERLAP=150` in `config.py`. These are character-oriented settings, not exact tokenizer token counts.
+
+**What to record:** file type, number of pages extracted, document type, chunk count, chunk size/overlap, page metadata, and whether headings or witness sections remain intelligible across boundaries.
+
+### Experiment 2 — Embeddings and vector-store persistence
+
+**Objective:** represent case passages and queries in a shared vector space and persist searchable chunks.
+
+**Implementation:** `rag/embeddings.py`, `rag/vector_store.py`, and `config.py`.
+
+**Default configuration:** local Sentence-Transformers `all-MiniLM-L6-v2` embeddings and persistent ChromaDB.
+
+**Execution:**
+1. Configure `EMBEDDING_PROVIDER=local` and `VECTOR_STORE_BACKEND=chroma`.
+2. Upload/index the synthetic case documents or your own allowed case files.
+3. Restart Streamlit and verify the document/chunk counts remain present.
+4. Run queries against the same indexed data.
+5. For an optional FAISS comparison, install the FAISS extra, change the backend setting, and re-index the documents into that backend.
+
+**Important:** ChromaDB and FAISS maintain separate indexes. Re-index when changing backend. Keep the embedding model and vector dimensions consistent for any given index; use a separate data directory when changing embedding dimensions/model.
+
+**What to record:** embedding provider/model, vector backend, indexed chunk count, persistence after restart, retrieval output, hardware, and first-run model-download/cache behavior.
+
+### Experiment 3 — LLM provider integration
+
+**Objective:** support local and hosted language-model execution behind a common service interface.
+
+**Implementation:** `llm/llm_service.py`, `.env.example`, and the provider controls in `app.py`.
+
+**Supported configuration choices:** Ollama, Gemini, OpenAI, and the deterministic `local` fallback. Actual availability depends on the credentials, local service, provider adapter, model name, and network.
+
+**Ollama execution:**
+```bash
+# In a separate terminal: start Ollama if it is not already running
+ollama serve
+
+# Pull the configured model (default shown in .env.example)
+ollama pull qwen2.5:1.5b
+
+# Optional connectivity/model check
+ollama list
+```
+
+Set `LLM_PROVIDER=ollama`, `LLM_MODEL=qwen2.5:1.5b`, and `OLLAMA_BASE_URL=http://localhost:11434` in `.env`, then restart the app.
+
+**Gemini/OpenAI execution:** set `LLM_PROVIDER=gemini` or `openai`, configure the corresponding API key and model/provider settings supported by `llm/llm_service.py`, then restart the application. Never commit credentials.
+
+**What to record:** provider, exact model ID, quantization (where applicable), temperature, API/model version if exposed, machine/hardware, warm-up status, latency, error/fallback state, and output quality. Do not compare provider timings from different hardware/network conditions as if they were controlled experiments.
+
+### Experiment 4 — Query normalization and intent classification
+
+**Objective:** test whether noisy, informal, paraphrased, ambiguous, and out-of-scope requests are normalized and routed to the intended workflow.
+
+**Implementation:** `utils/query_normalizer.py`, `utils/intent_classifier.py`, and the `IntentType` contract in `models/schemas.py`.
+
+**Automated execution:**
+```bash
+python -m pytest -q tests/test_query_understanding.py
+```
+
+The test module also contains a manual evaluation runner that builds a fresh sample index and evaluates its query set:
+
+```bash
+python tests/test_query_understanding.py
+```
+
+This script uses the deterministic local provider for its workflow and prints an evaluation summary. It rebuilds/clears the configured vector store as part of its setup: back up any local index you need before running it.
+
+**Coverage themes:** correct English, spelling mistakes, grammatical errors, informal phrasing, paraphrases, ambiguous questions, exact entities/dates/legal references, and out-of-domain queries.
+
+**Metrics in the runner:** baseline intent match, improved intent match, retrieval coverage, schema validity, grounding checks, and end-to-end elapsed time. Interpret them only in the context of this bundled test dataset and its expected labels; they are not a general legal-domain benchmark.
+
+### Experiment 5 — Structured answer schema and session workflow
+
+**Objective:** ensure the generated answer is returned in a stable structure that the UI can render and that session history can inspect.
+
+**Implementation:** `models/schemas.py`, `llm/llm_service.py`, and `agent/legal_research_agent.py`.
+
+**Execution:**
+```bash
+python -m pytest -q tests/test_audit_fixes.py
+```
+
+In the application, run a case question, inspect the returned findings, evidence summary, limitations, citations, and workflow diagnostics; then open **HISTORY** to inspect the session record. Clear session history only when desired; it is separate from the persistent vector index.
+
+**What to verify:** required answer fields, valid source objects, coherent limitations, correct intent, source identity/page/chunk details, and no unsupported claim introduced during synthesis.
+
+### Experiment 6 — Multi-agent intent routing
+
+**Objective:** delegate relevant evidence analysis to focused specialists while preserving the primary workflow coordinator and shared retrieved evidence.
+
+**Implementation:** `agent/specialist_agents.py` and `LegalResearchAgent`.
+
+**Automated execution:**
+```bash
+python -m pytest -q tests/test_multi_agent.py
+```
+
+**Manual execution:** start the application with an LLM provider that supports text generation, index the sample case, and try:
+- `Give me the timeline of events.`
+- `Are there contradictions between the witness statements?`
+- `What happened in this case?`
+- `What evidence connects the accused to the crime?`
+
+Inspect the workflow progress and agent activity. With the deterministic `local` provider, model-backed specialist reasoning is intentionally marked skipped; the deterministic timeline/contradiction paths remain separate.
+
+**What to record:** query, classified intent/confidence, selected specialists, specialist status, evidence context supplied, errors, total latency, and the final source-grounded answer.
+
+### Experiment 7A — Deterministic timeline extraction
+
+**Objective:** build an ordered, evidence-linked event sequence without relying on the model to invent the chronology.
+
+**Implementation:** `agent/timeline_pipeline.py`, `TimelineEvent` and `TimelineExtractionResult` in `models/schemas.py`, and timeline dispatch in `agent/legal_research_agent.py`.
+
+**Automated execution:**
+```bash
+python -m pytest -q tests/test_deterministic_workflows.py
+python -m pytest -q tests/test_audit_fixes.py -k timeline
+```
+
+**Manual execution:**
+1. Index the bundled synthetic case documents or a permitted test case.
+2. Run `Give me the timeline of events.` in **RESEARCH**.
+3. Inspect the timeline table and source citations.
+4. Inspect the workflow/tool diagnostics for selected chunk IDs, document IDs, selected count, evidence character count, excluded chunk IDs, and exclusion reasons.
+5. Check that time windows remain estimates, event types retain their procedural/source classification, and undated procedural events are not assigned invented timestamps.
+
+**Implemented checks/behaviors:** temporal marker extraction, event category assignment, date/time normalization, ranges and approximate times, deduplication across overlapping chunks, chronological sorting, source quote verification, malformed-fragment rejection, evidence-budget accounting, and insufficient-result reporting.
+
+**Important implementation boundary:** event extraction is currently deterministic rule/pattern-based over retrieved chunks; it is not a general-purpose legal event understanding model. Its source selection is bounded by retrieval results and the timeline bundle's context budget. Review the selected/excluded evidence metadata whenever the timeline appears incomplete.
+
+### Experiment 7B — Witness contradiction analysis
+
+**Objective:** compare actual witness claims and keep factual discrepancies distinct from corroboration and judicial resolution.
+
+**Implementation:** `agent/contradiction_pipeline.py`, `WitnessClaim`, `ContradictionComparison`, and `ContradictionAnalysisResult`.
+
+**Automated execution:**
+```bash
+python -m pytest -q tests/test_deterministic_workflows.py -k contradiction
+python -m pytest -q tests/test_audit_fixes.py -k contradiction
+python -m pytest -q tests/test_session_scoped_tools.py
+```
+
+**Manual execution:** run `Are there contradictions between the witness statements?` and inspect the two claims, source references, factual discrepancy, corroborating evidence, court resolution, and materiality assessment.
+
+**What to verify:** each claim is assigned to the correct speaker/source; the compared subject is explicit (time, location, attire, action, identification); independent evidence is not confused with testimony; and an explanation by the court does not erase the existence of differing statements.
+
+### Experiment 8 — Retrieval evaluation and ranking quality
+
+**Objective:** measure retrieval against human-verified relevance labels rather than treating similarity scores as ground truth.
+
+**Implementation:** `rag/evaluation.py` and the **RAG EVALUATION** tab in `app.py`.
+
+**Automated execution:**
+```bash
+python -m pytest -q tests/test_rag_evaluation.py tests/test_vector_store_backends.py
+```
+
+**Interactive execution:**
+1. Open **RAG EVALUATION**.
+2. Enter an evaluation query.
+3. Enter manually verified relevant filenames and/or chunk IDs.
+4. Select **Evaluate Retrieval**.
+5. Inspect the retrieved passages and reported metrics.
+
+**Bundled sample execution:** select **Run Sample Benchmark**. This evaluates the starter labelled synthetic-case queries, including one out-of-scope query with no relevant document label.
+
+**Metrics:**
+- Precision@K — fraction of retrieved top-K passages judged relevant.
+- Recall@K — fraction of supplied relevant labels retrieved.
+- F1@K — harmonic mean of precision and recall.
+- Hit rate — whether at least one relevant passage was retrieved.
+- Reciprocal rank — reciprocal rank of the first relevant result (MRR when averaged over queries).
+- Mean retrieval score and retrieval latency — diagnostics, not relevance ground truth.
+
+Document-level labels mark a retrieved chunk relevant when its normalized document name matches a labelled filename. Chunk-level labels match exact chunk IDs. If both are supplied, a hit occurs when either label matches.
+
+**Protocol for a defensible comparison:** prepare one fixed query set, manually label relevant documents/chunks before comparing variants, keep the same corpus and embedding model, use the same K, record configuration and run date, and compare aggregate plus per-query metrics. Do not tune and report on the same labels without disclosing that they were used for tuning.
+
+### Experiment 9 — Direct LLM versus RAG latency comparison
+
+**Objective:** show the difference between answering from model prior knowledge and executing the complete retrieval-grounded workflow.
+
+**Implementation:** `rag/benchmark.py` and the **Compare LLM-only vs RAG** control in **RAG EVALUATION**.
+
+**Automated execution:**
+```bash
+python -m pytest -q tests/test_rag_benchmark.py
+```
+
+**Interactive execution:** select a non-empty query in **RAG EVALUATION**, choose an LLM provider (not deterministic `local` fallback), and click **Compare LLM-only vs RAG**.
+
+The report shows both answers, direct-model latency, total RAG workflow latency, retrieval-only latency, retrieved passage count, cited source count, evidence strength, and workflow status.
+
+**Interpretation:** this is a single-query diagnostic comparison, not a controlled statistical result and not an answer-quality metric. Repeat multiple runs, separate cold-start from warm runs, alternate run order if practical, and report median/dispersion alongside the provider/model/hardware. The RAG and LLM-only answers have different evidence access by design.
+
+### Experiment 10 — End-to-end workflow and regression safety
+
+**Objective:** verify that timeline, contradiction, summary, evidence, insufficient-evidence, hypothetical, and out-of-scope paths coexist without regressions.
+
+**Focused execution:**
+```bash
+python -m pytest -q tests/test_multi_agent.py
+python -m pytest -q tests/test_deterministic_workflows.py
+python -m pytest -q tests/test_audit_fixes.py
+python -m pytest -q tests/test_session_scoped_tools.py
+```
+
+**Full execution:**
+```bash
+python -m pytest -q tests
+python -m compileall -q .
+```
+
+The test files use deterministic fixtures/mocks for core behavior. They do not require a running Ollama daemon or live Gemini/OpenAI calls for the unit-level checks. A separate manual run is still required to validate your chosen local model, model response quality, UI behavior, and local vector index.
 
 ---
 
-## 12. Quick Start & Setup
+## Installation
 
 ### Prerequisites
-- **Python 3.10+** installed
-- *(Optional)* [Ollama](https://ollama.com) installed locally for local LLM inference (`ollama pull qwen2.5:1.5b`).
 
-### Step 1: Clone & Setup Environment
+- Python 3.11 is the version used by the repository's GitHub Actions workflow.
+- Git.
+- A compatible environment for the pinned packages in `requirements.txt`.
+- Optional: Ollama and a locally pulled model, or API credentials for Gemini/OpenAI.
+- Optional: FAISS CPU if you want to use the FAISS backend.
+
+### Clone and create an environment
+
 ```bash
-# Navigate to project directory
-cd "RAG Agentic Ai"
+git clone https://github.com/SathOps/Crime-Scene-Investigation-RAG.git
+cd Crime-Scene-Investigation-RAG
 
-# Activate virtual environment
+python3.11 -m venv .venv
+
+# macOS / Linux
 source .venv/bin/activate
 
-# Install required packages
-pip install -r requirements.txt
+# Windows PowerShell
+# .venv\Scripts\Activate.ps1
+
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
 ```
 
-### Step 2: Environment Configuration
-Copy `.env.example` to `.env` and set your preferred provider settings:
+The requirements file is pinned. If installation fails on a particular OS/Python version, inspect the failing package's platform/Python support rather than randomly upgrading the whole dependency set.
+
+### Configure environment
+
 ```bash
 cp .env.example .env
 ```
 
-Example `.env` configurations:
+Edit `.env` for your provider, model, embedding provider, and vector backend. The example file documents the environment variables used by this repository. Keep the real `.env` out of version control.
 
-**For Local Ollama (Default):**
-```env
-LLM_PROVIDER=ollama
-OLLAMA_BASE_URL=http://localhost:11434
-OLLAMA_MODEL=qwen2.5:1.5b
+### Optional FAISS install
+
+```bash
+python -m pip install -r requirements-faiss.txt
 ```
 
-**For Google Gemini:**
-```env
-LLM_PROVIDER=gemini
-GEMINI_API_KEY=your_gemini_api_key_here
-GEMINI_MODEL=gemini-1.5-flash
-```
+Then set `VECTOR_STORE_BACKEND=faiss` in `.env` and re-index the intended documents. ChromaDB remains the default.
 
 ---
 
-## 13. Running the Application
+## Run the application
 
-Launch the Streamlit web application:
+### Start Ollama (only when using Ollama)
+
+In a separate terminal:
+
+```bash
+ollama serve
+ollama pull qwen2.5:1.5b
+ollama list
+```
+
+Confirm that the model name in `.env` matches an installed model. If Ollama is already running as a background service, do not start a second server process.
+
+### Launch Streamlit
+
+From the repository root, with the virtual environment activated:
+
 ```bash
 streamlit run app.py
 ```
 
-Access the dashboard at `http://localhost:8501`.
+Open the local URL printed by Streamlit (normally `http://localhost:8501`).
 
-### Usage Guide:
-1. **Load Sample Documents / Upload Case Files**: Use the sidebar button **"Load Sample Case Files"** to index all 8 synthetic legal records into ChromaDB, or upload your own PDF/DOCX/TXT files.
-2. **Configure Retriever & LLM**: Choose your active LLM provider (Ollama / Gemini / OpenAI) and chunking parameters in the sidebar settings.
-3. **Submit Research Query**: Enter your query (e.g., *"What were the contradictions between witness statements and CCTV footage regarding the timeline?"*).
-4. **Inspect Findings**: View structured outputs categorized into Grounded Answer, Key Findings, Evidence Breakdown, Limitations, and Sources.
+### First-run demonstration
 
----
+1. Confirm the chosen provider is ready.
+2. Use **Load Pre-packaged Synthetic Case Files** if the app offers the bundled-case shortcut, or upload the files in `sample_data/` from **CASE FILES**.
+3. Verify that the document and indexed chunk counts are non-zero.
+4. Open **RESEARCH** and run one of the built-in prompts.
+5. Inspect findings, source citations, evidence limitations, and workflow/tool diagnostics.
+6. Open **RAG EVALUATION** to run the labelled sample benchmark.
 
-## 14. Automated Testing & Verification
-
-### Multi-Agent Hardening & Audit Verification (Tests A through H)
-The test suite includes comprehensive regression and behavioral verification covering the complete audit:
-- **Test A: Witness Contradiction Detection**: Verifies that witness discrepancies (Ankit Sharma vs Priya Nair) across time (21:08 vs 21:15), location (rear vs front), and clothing (navy blue hoodie vs red jacket) are identified and distinguished from judicial resolution (`Contradiction identified: Yes`).
-- **Test B: Irrelevant Evidence Rejection**: Confirms `analyze_witness_contradictions` rejects alibi/cell tower records when witness statements are absent and reports insufficient evidence without hallucinating.
-- **Test C: Timeline Generation & Sufficiency**: Verifies timeline queries (`Give me the timeline of events`) pass the sufficiency gate on chronological judgment chunks and format sorted timestamps.
-- **Test D: Specialist Agent Disagreement Reconciliation**: Verifies `MultiAgentCoordinator.reconcile_analyses` resolves conflicting agent findings by cross-referencing authoritative court records.
-- **Test E: Out-of-Scope & Hypothetical Refusal**: Tests rejection of out-of-domain queries and isolation of standalone hypothetical questions.
-- **Test F: Citation Integrity**: Asserts that every cited source exists in the retrieved chunks with document name, page number, and chunk ID.
-- **Test G: Session Isolation**: Asserts that tools and agents bound to different cases do not bleed evidence or context.
-- **Test H: Workflow Execution Status & Diagnostics**: Verifies accurate stage states (`completed`, `skipped`, `failed`), timing, and chunk/document count metrics.
-
-Run the full automated test suite:
-```bash
-PYTHONPATH=. pytest -q tests/
-```
-
-Run the specific audit regression suite:
-```bash
-PYTHONPATH=. pytest -q tests/test_audit_fixes.py
-```
-
-Run the focused specialist-agent tests:
-```bash
-PYTHONPATH=. pytest -q tests/test_multi_agent.py
-```
-
-Run the existing automated verification scripts:
-
-```bash
-# 1. Run Query Understanding Evaluation Suite (39 test cases across 8 challenge categories)
-python tests/test_query_understanding.py
-
-# 2. Verify End-to-End Pipeline & Pydantic Validation
-python scratch/test_pipeline.py
-
-# 3. Verify Ollama Structured JSON Output Generation
-python scratch/verify_ollama_structured_output.py
-
-# 4. (Optional) Re-generate Synthetic Dataset Files
-python scratch/generate_synthetic_dataset.py
-```
+The bundled records are synthetic demonstration material. Do not interpret them as a real criminal case or use them to make decisions about an actual person.
 
 ---
 
-## 15. License & Disclaimers
+## Evaluation methodology
 
-This project is created for research and educational purposes under the AgenticAI framework. Please consult qualified legal professionals for official legal matters.
+Use the following result table when recording a run. Include raw output or exported screenshots/logs for traceability.
 
+| Field | Record |
+|---|---|
+| Run ID / date | Unique identifier and local date |
+| Git revision | Commit SHA and branch |
+| Dataset | Corpus name/version and number of documents/chunks |
+| Query set | Fixed list/version of queries |
+| Labels | Relevant file/chunk labels and label-review method |
+| LLM | Provider, exact model ID/version, generation settings |
+| Embeddings | Provider and model |
+| Vector store | ChromaDB or FAISS; index state |
+| Retrieval | K, thresholds/configuration, selected chunks |
+| Metrics | Precision@K, Recall@K, F1@K, hit rate, MRR, latency |
+| Workflow | Intent, specialists/dispatch path, tool status |
+| Grounding | Citation integrity, unsupported claims, limitations |
+| Environment | Python, OS, CPU/GPU/RAM, network/cold-warm status |
 
+### Recommended experiment sequence
+
+1. **Establish a baseline:** freeze the corpus, query list, labels, and configuration.
+2. **Run deterministic tests:** run the focused unit/regression suites and full pytest suite.
+3. **Run retrieval benchmark:** record per-query hits and aggregate ranking metrics.
+4. **Run workflow examples:** execute one representative query per supported intent and inspect source grounding.
+5. **Run live model comparisons:** repeat each query several times and separate cold/warm timings.
+6. **Review failure cases:** classify failures as ingestion, chunking, retrieval, intent, evidence selection, extraction, synthesis, or UI issues.
+7. **Report limitations:** include failed queries and excluded evidence; do not report only successful examples.
+
+### Reporting claims responsibly
+
+The repository contains a query-understanding evaluation runner and labelled retrieval benchmark utilities. Results from those tools are specific to the bundled synthetic corpus, labels, test queries, and selected local environment. Do not reuse historical README percentages as current results unless you re-run the experiment from a clean, documented revision and preserve its output.
+
+---
+
+## Testing and CI
+
+Run the full local verification from the repository root:
+
+```bash
+python -m pytest -q tests
+python -m compileall -q .
+```
+
+Useful focused commands:
+
+```bash
+# Multi-agent dispatch, specialist behavior, and failure handling
+python -m pytest -q tests/test_multi_agent.py
+
+# Timeline, contradiction, and workflow integration
+python -m pytest -q tests/test_deterministic_workflows.py
+
+# Audit/regression cases, evidence selection, provenance, and validation
+python -m pytest -q tests/test_audit_fixes.py
+
+# Query normalization and intent evaluation
+python -m pytest -q tests/test_query_understanding.py
+
+# Retrieval ranking and benchmark utilities
+python -m pytest -q tests/test_rag_evaluation.py tests/test_rag_benchmark.py
+
+# Request-scoped tools and vector-store backends
+python -m pytest -q tests/test_session_scoped_tools.py tests/test_vector_store_backends.py
+
+# Workflow metrics
+python -m pytest -q tests/test_workflow_metrics.py
+```
+
+GitHub Actions workflow: `.github/workflows/multi-agent-checks.yml`. It checks out the repository, sets up Python 3.11, installs lightweight test dependencies, compiles the project modules, and runs `python -m pytest -q tests` on its configured branch/pull-request events.
+
+A passing CI run validates the tests included in that run. It does not prove that a live hosted API, local Ollama model, full Streamlit browser interaction, or arbitrary user-supplied case corpus works correctly.
+
+---
+
+## Configuration
+
+The main configuration is loaded from `.env` (see [`.env.example`](.env.example)).
+
+| Variable | Purpose | Example/default |
+|---|---|---|
+| `LLM_PROVIDER` | Answer-generation provider | `ollama` |
+| `LLM_MODEL` | Configured model identifier | `qwen2.5:1.5b` |
+| `OLLAMA_BASE_URL` | Ollama server endpoint | `http://localhost:11434` |
+| `OLLAMA_MODEL` | Local Ollama model | `qwen2.5:1.5b` |
+| `EMBEDDING_PROVIDER` | Embedding provider | `local` |
+| `VECTOR_STORE_BACKEND` | Vector index implementation | `chroma` |
+| `GEMINI_API_KEY` | Gemini credential | Secret; do not commit |
+| `OPENAI_API_KEY` | OpenAI credential | Secret; do not commit |
+
+Other defaults, including chunk size, overlap, top-K, and storage directories, are set in `config.py`.
+
+---
+
+## Data and persistence
+
+- Uploaded/indexed documents and vector index data are stored under the configured project `data/` directories.
+- ChromaDB is the default persistent backend.
+- FAISS uses its index/record files under the configured vector-store directory.
+- Session history is held in Streamlit session state and is not the vector index.
+- Re-index after changing embedding model or vector backend.
+- Treat case files, index artifacts, API keys, and exported results as potentially sensitive. The repository's `.gitignore` should be reviewed before adding any local data to a commit.
+
+Do not upload confidential case material to a hosted LLM or embedding provider unless you have authorization and have reviewed the provider's data handling terms.
+
+---
+
+## Troubleshooting
+
+| Symptom | Checks |
+|---|---|
+| Ollama health check fails | Confirm `ollama serve` is running, `OLLAMA_BASE_URL` is correct, and the configured model appears in `ollama list`. |
+| Ollama responds but Streamlit appears stuck | Inspect the Streamlit terminal for the active stage; check embedding model initialization/download, first vector-store access, and provider inference separately. Use workflow progress/diagnostics to identify the stage. |
+| No case evidence is retrieved | Confirm documents are indexed, vector-store backend matches the index, embedding provider/model is consistent, and query terms correspond to the corpus. |
+| FAISS selected but import fails | Install `requirements-faiss.txt` and confirm the package supports your Python/OS combination. |
+| Empty or partial timeline | Inspect retrieved chunks and timeline bundle selected/excluded IDs; confirm relevant dated passages made it through top-K retrieval and the context budget. Rule-based date/time extraction cannot recover evidence that retrieval never returned. |
+| Contradiction analysis misses a witness | Inspect selected evidence chunk IDs and document labels; ensure actual witness statements are indexed and retrieved, rather than relying on an alibi passage or summary. |
+| Provider/API failure | Verify provider selection, model identifier, credentials, API access, and rate limits; check the Streamlit terminal for the underlying error. |
+| Dependency installation fails | Use the repository's Python 3.11 CI version as a baseline and inspect the specific package's compatibility constraints. |
+
+---
+
+## Limitations and responsible use
+
+- This is a research prototype and not a legal-advice system, legal authority, or substitute for a qualified lawyer.
+- The system can only retrieve and reason over documents that were ingested and indexed; missing, low-quality, scanned, or poorly extracted source text can lead to incomplete results.
+- Retrieval is bounded by top-K and ranking behavior. Evidence absent from retrieved chunks cannot be relied on by downstream analysis.
+- The timeline pipeline uses deterministic temporal patterns and sentence extraction. Unusual date formats, implicit chronology, cross-document date inheritance, and complex narratives may require human review.
+- The current timeline evidence bundle uses a character budget and reports exclusions; users should inspect the metadata when a timeline may be incomplete.
+- Contradiction detection depends on the available witness/source passages and deterministic comparison rules. It may miss nuanced semantic conflicts or identify apparent differences that require context.
+- Specialist-agent responses are LLM-generated supporting analyses and may be incomplete or wrong. They are not primary evidence.
+- Hosted provider behavior, output quality, latency, availability, and pricing can change independently of this repository.
+- Synthetic sample records are for software testing and demonstration only.
+- Always verify every consequential finding against the original document and page before relying on it.
+
+---
+
+## Project links
+
+- **Repository:** [SathOps/Crime-Scene-Investigation-RAG](https://github.com/SathOps/Crime-Scene-Investigation-RAG)
+- **Multi-agent migration notes:** [docs/MULTI_AGENT_MIGRATION.md](docs/MULTI_AGENT_MIGRATION.md)
+
+## License
+
+No license file was present in the reviewed repository tree at the time this README was updated. Unless a license is added, do not assume that the source code is licensed for unrestricted reuse.
