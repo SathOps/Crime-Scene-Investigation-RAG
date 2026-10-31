@@ -67,7 +67,7 @@ class SpecialistAgent:
                 IntentType.CONTRADICTION_DETECTION.value,
             }
             or "Witness" in self.agent_name
-            or any(k in (query + " " + evidence).lower() for k in ("contradict", "discrepan", "inconsisten", "witness statements", "ankit", "priya"))
+            or any(k in query.lower() for k in ("contradict", "discrepan", "inconsisten", "conflict"))
         )
         contradiction_protocol = ""
         if is_contradiction:
@@ -315,7 +315,7 @@ class MultiAgentCoordinator:
             IntentType.WITNESS_ANALYSIS.value,
             IntentType.CONTRADICTION_ANALYSIS.value,
             IntentType.CONTRADICTION_DETECTION.value,
-        } or any(k in combined_text for k in ("contradiction", "discrepancy"))
+        } or any(k in str(intent_val).lower() for k in ("contradict", "discrepan"))
 
         if is_contradiction_scope:
             contra_res = ContradictionPipeline.analyze_contradictions(chunks)

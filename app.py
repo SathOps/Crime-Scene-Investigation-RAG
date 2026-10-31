@@ -1619,11 +1619,8 @@ with tab_research:
                 norm_disp_html = f'<div style="font-size:0.82rem;color:var(--blue-glow);margin-top:4px;font-family:var(--font-mono);"><span style="color:var(--text-muted);">Normalized:</span> {html.escape(state.normalized_query)}</div>'
 
             clean_query = html.escape(state.query)
-            clean_ans = html.escape(ans.answer).replace("\n\n", "<br><br>").replace("\n", "<br>")
-            clean_ans = re.sub(r'\*\*(.*?)\*\*', r'<strong>\1</strong>', clean_ans)
-
             st.html(f"""
-            <div class="answer-surface">
+            <div class="answer-surface" style="padding-bottom: 8px;">
                 <div class="result-header">
                     <div>
                         <div class="answer-label">AI Research Response</div>
@@ -1635,9 +1632,9 @@ with tab_research:
                         Source Grounded
                     </div>
                 </div>
-                <div class="answer-text">{clean_ans}</div>
             </div>
             """)
+            st.markdown(ans.answer)
 
             # Key Findings + Evidence in columns
             col_findings, col_evidence = st.columns(2)
