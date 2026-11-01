@@ -1,10 +1,11 @@
 import json
 import re
+import time
 import requests
 from typing import List, Dict, Any, Tuple, Optional
 from pydantic import ValidationError
 
-from config import OLLAMA_BASE_URL, OLLAMA_MODEL
+from config import OLLAMA_BASE_URL, OLLAMA_MODEL, DEFAULT_GEMINI_MODEL
 from models.schemas import DocumentChunk, IntentType, LegalResearchAnswer, SourceModel, TimelineEvent
 from prompts.legal_research_prompt import LEGAL_RESEARCH_PROMPT_TEMPLATE
 from agent.timeline_pipeline import TimelinePipeline
@@ -13,6 +14,57 @@ class LLMService:
     """LangChain-powered LLM Service supporting Ollama (ChatOllama), Gemini, OpenAI,
     and a deterministic Local Fallback generator with Pydantic Structured Output Validation.
     """
+
+    @staticmethod
+    def resolve_gemini_model(model_name: Optional[str] = None) -> str:
+        """Resolve and normalize Gemini model names, migrating deprecated 2.5 models to modern supported versions."""
+        fallback = DEFAULT_GEMINI_MODEL or "gemini-3.8-flash"
+        if not model_name or model_name in {OLLAMA_MODEL, "gemini-2.5-flash", "models/gemini-2.5-flash"}:
+            return fallback
+        clean = model_name.strip()
+        if clean.startswith("models/"):
+            clean = clean[len("models/"):]
+        if clean == "gemini-2.5-flash" or clean.startswith("gemini-2.5"):
+            return fallback
+        return clean
+
+    @staticmethod
+    def _call_gemini_with_fallback_and_retry(
+        client: Any,
+        primary_model: Optional[str],
+        contents: Any,
+        max_retries_per_model: int = 2
+    ) -> Tuple[Any, str]:
+        """Call Gemini generate_content with backoff retry on transient errors (503/429)
+        and automatic failover to alternative supported Gemini models.
+        """
+        primary = LLMService.resolve_gemini_model(primary_model)
+        candidates = [primary]
+        for fallback in ["gemini-2.0-flash", "gemini-1.5-flash", "gemini-2.5-flash-latest"]:
+            if fallback not in candidates:
+                candidates.append(fallback)
+
+        last_error = None
+        for model in candidates:
+            for attempt in range(max_retries_per_model + 1):
+                try:
+                    res = client.models.generate_content(
+                        model=model,
+                        contents=contents
+                    )
+                    return res, model
+                except Exception as e:
+                    last_error = e
+                    err_str = str(e).lower()
+                    is_transient = any(kw in err_str for kw in ["503", "unavailable", "high demand", "429", "resource_exhausted"])
+                    if is_transient and attempt < max_retries_per_model:
+                        time.sleep(1.0 * (attempt + 1))
+                        continue
+                    # Try next candidate model on non-retryable error or exhausted attempts
+                    break
+        if last_error:
+            raise last_error
+        raise RuntimeError("No response from Gemini candidate models.")
 
     def __init__(self, provider: str = "ollama", model_name: str = OLLAMA_MODEL, api_key: str = "", base_url: str = OLLAMA_BASE_URL):
         self.provider = provider.lower()
@@ -168,8 +220,9 @@ class LLMService:
                 )
                 prompt_text = "\n\n".join([m.content for m in prompt_messages])
 
-                res = client.models.generate_content(
-                    model=self.model_name or "gemini-2.5-flash",
+                res, used_model = self._call_gemini_with_fallback_and_retry(
+                    client=client,
+                    primary_model=self.model_name,
                     contents=prompt_text
                 )
                 raw_content = res.text.strip() if res and res.text else ""
@@ -804,11 +857,9 @@ class LLMService:
             from google import genai
 
             client = genai.Client(api_key=self.api_key)
-            model_name = self.model_name
-            if not model_name or model_name == OLLAMA_MODEL:
-                model_name = "gemini-2.5-flash"
-            response = client.models.generate_content(
-                model=model_name,
+            response, used_model = self._call_gemini_with_fallback_and_retry(
+                client=client,
+                primary_model=self.model_name,
                 contents=f"SYSTEM INSTRUCTIONS:\n{system_prompt}\n\nUSER TASK:\n{user_prompt}",
             )
             result = (getattr(response, "text", None) or "").strip()
