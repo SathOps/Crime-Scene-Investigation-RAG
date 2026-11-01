@@ -32,7 +32,8 @@ from datetime import datetime
 from config import (
     DOCUMENTS_DIR, VECTORSTORE_DIR, SAMPLE_DATA_DIR,
     DEFAULT_CHUNK_SIZE, DEFAULT_CHUNK_OVERLAP, DEFAULT_TOP_K,
-    DEFAULT_LLM_PROVIDER, DEFAULT_LLM_MODEL, OLLAMA_BASE_URL, OLLAMA_MODEL,
+    DEFAULT_LLM_PROVIDER, DEFAULT_LLM_MODEL, DEFAULT_GEMINI_MODEL,
+    OLLAMA_BASE_URL, OLLAMA_MODEL,
     GEMINI_API_KEY, OPENAI_API_KEY
 )
 import importlib
@@ -63,6 +64,123 @@ import agent.legal_research_agent
 importlib.reload(agent.legal_research_agent)
 from agent.legal_research_agent import LegalResearchAgent, is_standalone_hypothetical_query
 from utils.helpers import state_to_json, format_file_size
+
+def format_readable_answer(raw_answer: str) -> str:
+    """Enhance raw legal answers with colorful badges, quotes, timestamps, citations, and structured sections."""
+    if not raw_answer:
+        return ""
+    
+    text = raw_answer
+
+    # 1. Blockquote quoted witness/accused speech before injecting HTML attributes
+    quote_pattern = re.compile(r"([\"“]([A-Z][^\"”\n]{15,})[\"”])")
+    text = quote_pattern.sub(r'<blockquote class="evidence-quote">“\2”</blockquote>', text)
+
+    # 2a. Convert "According to <doc> (Page <p>):" into a high-visibility source banner
+    doc_banner_pattern = re.compile(
+        r"(?:^|\n\n?)(?:According to|From|Per)\s+([a-zA-Z0-9_\-\.]+\.(?:txt|pdf|docx|csv|json|png|jpg|jpeg)|\d{2}_[a-zA-Z0-9_\-]+)\s*\((?:Page|p\.|page)?\s*(\d+)[^)]*\):?",
+        re.IGNORECASE
+    )
+    def _doc_banner_sub(m):
+        return f'\n\n<div class="evidence-source-card-header"><span class="evidence-source-icon">📄</span><span class="evidence-source-doc">{m.group(1)}</span><span class="evidence-source-page">PAGE {m.group(2)}</span></div>\n\n'
+    text = doc_banner_pattern.sub(_doc_banner_sub, text)
+
+    # 2b. Standalone or line-start parenthesized citations: "(03_CCTV_Analysis_Report.txt, Page 1)"
+    line_start_citation_pattern = re.compile(
+        r"(?:^|\n\n?)\s*(?:[•\-*]|\d+\.)?\s*[\(\[]\s*([a-zA-Z0-9_\-\.]+\.(?:txt|pdf|docx|csv|json|png|jpg|jpeg)|\d{2}_[a-zA-Z0-9_\-]+)\s*(?:,\s*(?:Page|p\.|page)?\s*(\d+))?(?:\s*;\s*chunk\s*\d+)?\s*[\)\]]:?",
+        re.IGNORECASE
+    )
+    def _line_start_sub(m):
+        doc = m.group(1)
+        page = f"PAGE {m.group(2)}" if m.group(2) else "DOC"
+        return f'\n\n<div class="evidence-source-card-header"><span class="evidence-source-icon">📄</span><span class="evidence-source-doc">{doc}</span><span class="evidence-source-page">{page}</span></div>\n\n'
+    text = line_start_citation_pattern.sub(_line_start_sub, text)
+
+    # 2c. Evidence Passage references: "Evidence Passage 01 (doc, Page 1):"
+    passage_pat = re.compile(
+        r"\bEvidence\s+Passage\s+(\d+)\s*[\(\[]\s*([a-zA-Z0-9_\-\.]+\.(?:txt|pdf|docx|csv|json|png|jpg|jpeg)|\d{2}_[a-zA-Z0-9_\-]+)\s*(?:,\s*(?:Page|p\.|page)?\s*(\d+))?(?:\s*;\s*chunk\s*\d+)?\s*[\)\]]:?",
+        re.IGNORECASE
+    )
+    def _passage_sub(m):
+        num = m.group(1)
+        doc = m.group(2)
+        page_badge = f'<span class="citation-divider">|</span><span class="citation-page">PAGE {m.group(3)}</span>' if m.group(3) else ""
+        return f'<span class="passage-badge">PASSAGE {num}</span><span class="citation-pill"><span class="citation-icon">📄</span><span class="citation-doc">{doc}</span>{page_badge}</span> '
+    text = passage_pat.sub(_passage_sub, text)
+
+    # 2d. Remaining inline citations: "(03_CCTV_Analysis_Report.txt, Page 1)" or "[doc, p. 1]"
+    inline_citation_pat = re.compile(
+        r"[\(\[]\s*([a-zA-Z0-9_\-\.]+\.(?:txt|pdf|docx|csv|json|png|jpg|jpeg)|\d{2}_[a-zA-Z0-9_\-]+)\s*(?:,\s*(?:Page|p\.|page)?\s*(\d+))?(?:\s*;\s*chunk\s*\d+)?\s*[\)\]]",
+        re.IGNORECASE
+    )
+    def _inline_sub(m):
+        doc = m.group(1)
+        page_badge = f'<span class="citation-divider">|</span><span class="citation-page">PAGE {m.group(2)}</span>' if m.group(2) else ""
+        return f'<span class="citation-pill"><span class="citation-icon">📄</span><span class="citation-doc">{doc}</span>{page_badge}</span>'
+    text = inline_citation_pat.sub(_inline_sub, text)
+
+    # 3. Timestamps
+    timestamp_pattern = re.compile(
+        r"(?:•\s*)?Timestamp\s+(\d{1,2}:\d{2}(?::\d{2})?\s*(?:HRS|hrs|AM|PM|am|pm)?)\s*(?:\(([^)]+)\))?:?",
+        re.IGNORECASE
+    )
+    def _ts_sub(m):
+        date_str = f' <span class="timestamp-date">({m.group(2)})</span>' if m.group(2) else ""
+        return f'<div class="timeline-ts-row"><span class="timestamp-badge">🕒 {m.group(1)}</span>{date_str}</div>\n'
+    text = timestamp_pattern.sub(_ts_sub, text)
+
+    # 4. Q&A highlights
+    text = re.sub(r"\b(Q\d+|Question\s*\d*)\s*:\s*", r'<span class="qa-badge-q">\1:</span> ', text)
+    text = re.sub(r"\bAnswer\s*:\s*", r'<span class="qa-badge-a">Answer:</span> ', text)
+
+    # 5. Statutes & Acts
+    statute_pattern = re.compile(
+        r"\b((?:Section|Sec\.|Sections)\s+\d+[A-Z]?(?:\s+(?:Cr\.?P\.?C\.?|BNSS|IPC|IEA|BSA))?(?:[,\s]+and\s+\d+[A-Z]?)*)\b",
+        re.IGNORECASE
+    )
+    text = statute_pattern.sub(r'<span class="statute-pill">\1</span>', text)
+
+    return text
+
+
+def format_finding_item(text: str) -> str:
+    """Enhance findings and evidence summaries with colorful citation badges and highlights."""
+    if not text:
+        return ""
+    formatted = text
+
+    # 1. Evidence Passage XX
+    passage_pat = re.compile(
+        r"\bEvidence\s+Passage\s+(\d+)\s*[\(\[]\s*([a-zA-Z0-9_\-\.]+\.(?:txt|pdf|docx|csv|json|png|jpg|jpeg)|\d{2}_[a-zA-Z0-9_\-]+)\s*(?:,\s*(?:Page|p\.|page)?\s*(\d+))?(?:\s*;\s*chunk\s*\d+)?\s*[\)\]]:?",
+        re.IGNORECASE
+    )
+    def _passage_sub(m):
+        num = m.group(1)
+        doc = m.group(2)
+        page_badge = f'<span class="citation-divider">|</span><span class="citation-page">PAGE {m.group(3)}</span>' if m.group(3) else ""
+        return f'<span class="passage-badge">PASSAGE {num}</span><span class="citation-pill"><span class="citation-icon">📄</span><span class="citation-doc">{doc}</span>{page_badge}</span> '
+    formatted = passage_pat.sub(_passage_sub, formatted)
+
+    # 2. General citations: (03_CCTV_Analysis_Report.txt, Page 1) or [07_Accused_Statement.txt, p. 1]
+    citation_pat = re.compile(
+        r"[\(\[]\s*([a-zA-Z0-9_\-\.]+\.(?:txt|pdf|docx|csv|json|png|jpg|jpeg)|\d{2}_[a-zA-Z0-9_\-]+)\s*(?:,\s*(?:Page|p\.|page)?\s*(\d+))?(?:\s*;\s*chunk\s*\d+)?\s*[\)\]]:?",
+        re.IGNORECASE
+    )
+    def _cite_sub(m):
+        doc = m.group(1)
+        page_badge = f'<span class="citation-divider">|</span><span class="citation-page">PAGE {m.group(2)}</span>' if m.group(2) else ""
+        return f'<span class="citation-pill"><span class="citation-icon">📄</span><span class="citation-doc">{doc}</span>{page_badge}</span> '
+    formatted = citation_pat.sub(_cite_sub, formatted)
+
+    # 3. Statutes
+    statute_pattern = re.compile(
+        r"\b((?:Section|Sec\.|Sections)\s+\d+[A-Z]?(?:\s+(?:Cr\.?P\.?C\.?|BNSS|IPC|IEA|BSA))?(?:[,\s]+and\s+\d+[A-Z]?)*)\b",
+        re.IGNORECASE
+    )
+    formatted = statute_pattern.sub(r'<span class="statute-pill">\1</span>', formatted)
+    formatted = re.sub(r"^(Contradiction Identified\s*:)", r'<strong style="color:#EF4444;">⚠️ \1</strong>', formatted, flags=re.IGNORECASE)
+    formatted = re.sub(r"^(Verified Procedural Record\s*:)", r'<strong style="color:#60A5FA;">✓ \1</strong>', formatted, flags=re.IGNORECASE)
+    return formatted
 
 # ─────────────────────────────────────────────
 # PAGE CONFIG
@@ -154,10 +272,12 @@ html, body, .stApp, [data-testid="stAppViewContainer"],
     font-size: 0.72rem !important;
     font-weight: 500 !important;
     letter-spacing: 0.06em !important;
-    padding: 10px 16px !important;
+    padding: 8px 16px !important;
+    min-height: 38px !important;
     text-transform: uppercase !important;
     transition: var(--transition) !important;
     cursor: pointer !important;
+    box-sizing: border-box !important;
 }
 .stButton > button:hover {
     border-color: var(--blue-primary) !important;
@@ -170,9 +290,30 @@ html, body, .stApp, [data-testid="stAppViewContainer"],
     transform: translateY(0) !important;
 }
 
-/* Primary Button */
-[data-testid="stFormSubmitButton"] > button,
+/* Primary Action Button (e.g. Process in sidebar) - matched height */
 .stButton > button[kind="primary"] {
+    background: linear-gradient(135deg, var(--blue-primary) 0%, #1d4ed8 100%) !important;
+    color: #ffffff !important;
+    border: 1px solid var(--blue-primary) !important;
+    font-family: var(--font-mono) !important;
+    font-size: 0.72rem !important;
+    font-weight: 600 !important;
+    letter-spacing: 0.08em !important;
+    text-transform: uppercase !important;
+    padding: 8px 16px !important;
+    min-height: 38px !important;
+    border-radius: var(--radius-sm) !important;
+    box-shadow: 0 2px 10px rgba(37,99,235,0.2) !important;
+    box-sizing: border-box !important;
+}
+.stButton > button[kind="primary"]:hover {
+    background: linear-gradient(135deg, var(--blue-bright) 0%, var(--blue-primary) 100%) !important;
+    box-shadow: 0 4px 18px rgba(37,99,235,0.35) !important;
+    transform: translateY(-1px) !important;
+}
+
+/* Main Form Submit Button (Run Analysis) */
+[data-testid="stFormSubmitButton"] > button {
     background: linear-gradient(135deg, var(--blue-primary) 0%, #1d4ed8 100%) !important;
     color: #ffffff !important;
     border: 1px solid var(--blue-primary) !important;
@@ -181,12 +322,13 @@ html, body, .stApp, [data-testid="stAppViewContainer"],
     font-weight: 600 !important;
     letter-spacing: 0.1em !important;
     text-transform: uppercase !important;
-    padding: 14px 24px !important;
+    padding: 12px 24px !important;
+    min-height: 44px !important;
     border-radius: var(--radius-sm) !important;
     box-shadow: 0 2px 12px rgba(37,99,235,0.2) !important;
+    box-sizing: border-box !important;
 }
-[data-testid="stFormSubmitButton"] > button:hover,
-.stButton > button[kind="primary"]:hover {
+[data-testid="stFormSubmitButton"] > button:hover {
     background: linear-gradient(135deg, var(--blue-bright) 0%, var(--blue-primary) 100%) !important;
     box-shadow: 0 4px 24px rgba(37,99,235,0.35) !important;
     transform: translateY(-1px) !important;
@@ -568,42 +710,46 @@ html, body, .stApp, [data-testid="stAppViewContainer"],
 .prompt-card {
     background: var(--surface-1);
     border: 1px solid var(--border-subtle);
-    border-radius: var(--radius-md);
-    padding: 14px 16px;
-    cursor: pointer;
+    border-radius: var(--radius-sm);
+    padding: 10px 12px;
     transition: var(--transition);
-    height: 100%;
+    height: 74px;
+    box-sizing: border-box;
+    margin-bottom: 8px;
+    display: flex;
+    flex-direction: column;
+    justify-content: flex-start;
 }
 .prompt-card:hover {
     border-color: var(--blue-primary);
     background: var(--blue-dim);
-    transform: translateY(-2px);
-    box-shadow: 0 4px 16px rgba(37,99,235,0.1);
 }
 .prompt-num {
     font-family: var(--font-mono);
     font-size: 0.6rem;
     color: var(--blue-primary);
     letter-spacing: 0.1em;
-    margin-bottom: 6px;
+    margin-bottom: 3px;
+    line-height: 1;
 }
 .prompt-title {
     font-family: var(--font-mono);
-    font-size: 0.7rem;
-    font-weight: 600;
+    font-size: 0.68rem;
+    font-weight: 700;
     color: var(--text-primary);
     text-transform: uppercase;
     letter-spacing: 0.04em;
-    margin-bottom: 4px;
+    margin-bottom: 3px;
+    line-height: 1.2;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
 }
 .prompt-desc {
     font-family: var(--font-sans);
-    font-size: 0.65rem;
+    font-size: 0.62rem;
     color: var(--text-muted);
-    line-height: 1.3;
+    line-height: 1.25;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -649,84 +795,263 @@ html, body, .stApp, [data-testid="stAppViewContainer"],
     50%      { box-shadow: 0 0 16px var(--green), 0 0 24px rgba(34,197,94,0.7); }
 }
 
+/* ── WORKFLOW CARD (INTEGRATED PIPELINE DASHBOARD) ── */
+.workflow-card {
+    background: linear-gradient(180deg, #0d121c 0%, #070a10 100%);
+    border: 1px solid rgba(37, 99, 235, 0.22);
+    border-radius: var(--radius-md);
+    padding: 14px 18px 12px;
+    margin: 6px 0 12px;
+    box-shadow: 0 4px 24px rgba(0, 0, 0, 0.4), inset 0 1px 0 rgba(255, 255, 255, 0.05);
+    animation: fadeInUp 0.5s ease;
+}
+
+.workflow-header-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding-bottom: 10px;
+    margin-bottom: 8px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.workflow-header-left {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.workflow-live-pulse {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--green);
+    box-shadow: 0 0 8px rgba(34, 197, 94, 0.7);
+    animation: pulse-online 2s infinite;
+}
+
+.workflow-header-title {
+    font-family: var(--font-mono);
+    font-size: 0.65rem;
+    font-weight: 700;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--blue-glow);
+}
+
+.workflow-status-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-family: var(--font-mono);
+    font-size: 0.60rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    padding: 3px 8px;
+    border-radius: 4px;
+    font-weight: 600;
+}
+.workflow-status-badge.success {
+    background: rgba(34, 197, 94, 0.12);
+    border: 1px solid rgba(34, 197, 94, 0.3);
+    color: #4ade80;
+}
+.workflow-status-badge.warning {
+    background: rgba(245, 158, 11, 0.12);
+    border: 1px solid rgba(245, 158, 11, 0.3);
+    color: #fbbf24;
+}
+
+/* ── PIPELINE TRACK (6 COMPACT STAGES) ───── */
+.pipeline-track {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    position: relative;
+    padding: 4px 0 8px;
+    gap: 0;
+}
+
+.pipeline-stage {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+    position: relative;
+    z-index: 2;
+    flex: 1;
+    min-width: 0;
+}
+
+.stage-badge {
+    width: 26px;
+    height: 26px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-family: var(--font-mono);
+    font-size: 0.68rem;
+    font-weight: 700;
+    margin-bottom: 6px;
+    transition: var(--transition);
+}
+
+.stage-badge.completed {
+    background: rgba(34, 197, 94, 0.16);
+    border: 1.5px solid var(--green);
+    color: var(--green);
+    box-shadow: 0 0 10px rgba(34, 197, 94, 0.4);
+}
+
+.stage-badge.running {
+    background: rgba(37, 99, 235, 0.2);
+    border: 1.5px solid var(--blue-bright);
+    color: var(--blue-bright);
+    box-shadow: 0 0 12px rgba(37, 99, 235, 0.5);
+    animation: pulseGlow 1.5s ease-in-out infinite;
+}
+
+.stage-badge.skipped {
+    background: rgba(100, 116, 139, 0.15);
+    border: 1.5px solid rgba(100, 116, 139, 0.4);
+    color: var(--text-muted);
+}
+
+.stage-badge.failed {
+    background: rgba(239, 68, 68, 0.15);
+    border: 1.5px solid var(--red);
+    color: var(--red);
+    box-shadow: 0 0 10px rgba(239, 68, 68, 0.35);
+}
+
+.stage-connector {
+    flex: 1;
+    height: 2px;
+    margin-top: 12px;
+    min-width: 14px;
+    background: rgba(255, 255, 255, 0.1);
+    z-index: 1;
+    border-radius: 1px;
+    transition: var(--transition);
+}
+
+.stage-connector.completed,
+.stage-connector.active {
+    background: linear-gradient(90deg, var(--green), var(--blue-bright));
+    box-shadow: 0 0 6px rgba(34, 197, 94, 0.4);
+}
+
+.stage-connector.failed {
+    background: linear-gradient(90deg, var(--green), var(--red));
+}
+
+.stage-name {
+    font-family: var(--font-mono);
+    font-size: 0.62rem;
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--text-primary);
+    margin-bottom: 3px;
+    white-space: nowrap;
+}
+
+.stage-value {
+    font-family: var(--font-mono);
+    font-size: 0.58rem;
+    color: var(--text-secondary);
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 3px;
+    padding: 2px 6px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 95%;
+}
+
+/* ── WORKFLOW FOOTER METRICS & PILLS ──────── */
+.workflow-footer-strip {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: 8px;
+    padding-top: 10px;
+    border-top: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.wf-stat-chip {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 5px;
+    background: rgba(0, 0, 0, 0.35);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    border-radius: 4px;
+    padding: 3px 8px;
+}
+
+.wf-stat-label {
+    font-family: var(--font-mono);
+    font-size: 0.52rem;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+}
+
+.wf-stat-value {
+    font-family: var(--font-mono);
+    font-size: 0.66rem;
+    font-weight: 600;
+    color: var(--blue-glow);
+}
+
+.wf-stat-spacer {
+    flex: 1;
+}
+
+.wf-pill-group {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+}
+
+/* Legacy pipeline compatibility styles */
 .pipeline-container {
     display: flex;
     align-items: center;
     gap: 0;
-    padding: 20px 0;
-    margin: 16px 0;
+    padding: 10px 0;
+    margin: 8px 0;
     overflow-x: auto;
 }
 .pipeline-node {
     display: flex;
     flex-direction: column;
     align-items: center;
-    min-width: 90px;
+    min-width: 80px;
     flex-shrink: 0;
 }
-.pipeline-node.step-1 { animation: nodePop 0.35s cubic-bezier(0.34, 1.56, 0.64, 1) 0.05s both; }
-.pipeline-node.step-2 { animation: nodePop 0.35s cubic-bezier(0.34, 1.56, 0.64, 1) 0.40s both; }
-.pipeline-node.step-3 { animation: nodePop 0.35s cubic-bezier(0.34, 1.56, 0.64, 1) 0.75s both; }
-.pipeline-node.step-4 { animation: nodePop 0.35s cubic-bezier(0.34, 1.56, 0.64, 1) 1.10s both; }
-.pipeline-node.step-5 { animation: nodePop 0.35s cubic-bezier(0.34, 1.56, 0.64, 1) 1.45s both; }
-.pipeline-node.step-6 { animation: nodePop 0.35s cubic-bezier(0.34, 1.56, 0.64, 1) 1.80s both; }
-
 .pipeline-connector {
     flex: 1;
     height: 2px;
     background: linear-gradient(90deg, var(--green), var(--blue-primary));
-    min-width: 24px;
-    margin-bottom: 28px;
-    transform-origin: left center;
+    min-width: 16px;
+    margin-bottom: 24px;
 }
-.pipeline-connector.conn-1 { animation: lineGrow 0.3s ease 0.22s both; }
-.pipeline-connector.conn-2 { animation: lineGrow 0.3s ease 0.57s both; }
-.pipeline-connector.conn-3 { animation: lineGrow 0.3s ease 0.92s both; }
-.pipeline-connector.conn-4 { animation: lineGrow 0.3s ease 1.27s both; }
-.pipeline-connector.conn-5 { animation: lineGrow 0.3s ease 1.62s both; }
-
 .pipeline-dot {
-    width: 12px; height: 12px;
+    width: 10px; height: 10px;
     border-radius: 50%;
     background: var(--blue-primary);
-    margin-bottom: 8px;
-    box-shadow: 0 0 8px rgba(37,99,235,0.3);
+    margin-bottom: 6px;
 }
-.pipeline-dot.completed {
-    background: var(--green);
-    box-shadow: 0 0 8px rgba(34,197,94,0.4);
-}
-.pipeline-dot.failed {
-    background: var(--red);
-    box-shadow: 0 0 8px rgba(239,68,68,0.4);
-}
-.pipeline-dot.skipped {
-    background: var(--text-muted);
-    box-shadow: 0 0 8px rgba(100,116,139,0.3);
-}
-.pipeline-dot.running {
-    background: var(--blue-primary);
-    box-shadow: 0 0 8px rgba(37,99,235,0.6);
-    animation: pulseGlow 1.5s ease-in-out infinite;
-}
-.pipeline-node.step-6 .pipeline-dot.completed {
-    animation: pulseGlow 2s ease-in-out infinite 2.1s;
-}
-.pipeline-label {
-    font-family: var(--font-mono);
-    font-size: 0.58rem;
-    letter-spacing: 0.1em;
-    text-transform: uppercase;
-    color: var(--text-muted);
-    text-align: center;
-}
-.pipeline-value {
-    font-family: var(--font-mono);
-    font-size: 0.62rem;
-    color: var(--text-secondary);
-    text-align: center;
-    margin-top: 2px;
-}
+.pipeline-dot.completed { background: var(--green); box-shadow: 0 0 8px rgba(34,197,94,0.4); }
+.pipeline-dot.failed { background: var(--red); }
+.pipeline-dot.skipped { background: var(--text-muted); }
+.pipeline-dot.running { background: var(--blue-primary); animation: pulseGlow 1.5s infinite; }
+.pipeline-label { font-family: var(--font-mono); font-size: 0.58rem; letter-spacing: 0.1em; text-transform: uppercase; color: var(--text-muted); }
+.pipeline-value { font-family: var(--font-mono); font-size: 0.60rem; color: var(--text-secondary); margin-top: 2px; }
 
 /* ── RESULT CARD ──────────────────────────── */
 .result-header {
@@ -756,8 +1081,8 @@ html, body, .stApp, [data-testid="stAppViewContainer"],
     background: var(--surface-1);
     border: 1px solid var(--border-subtle);
     border-radius: var(--radius-md);
-    padding: 24px;
-    margin: 16px 0;
+    padding: 16px 20px 12px;
+    margin: 6px 0 8px;
     animation: fadeInUp 0.5s ease;
 }
 .answer-label {
@@ -813,10 +1138,17 @@ html, body, .stApp, [data-testid="stAppViewContainer"],
 .pill-sources  { background: var(--surface-3); border: 1px solid var(--border-mid); color: var(--text-secondary); }
 
 /* ── NUMBERED FINDINGS ────────────────────── */
+.findings-container {
+    background: var(--surface-1);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md);
+    padding: 8px 16px;
+    margin-bottom: 10px;
+}
 .finding-row {
     display: flex;
-    gap: 14px;
-    padding: 12px 0;
+    gap: 12px;
+    padding: 8px 0;
     border-bottom: 1px solid var(--border-subtle);
     animation: fadeInUp 0.4s ease;
 }
@@ -835,6 +1167,216 @@ html, body, .stApp, [data-testid="stAppViewContainer"],
     font-size: 0.85rem;
     color: var(--text-primary);
     line-height: 1.55;
+}
+
+/* ── READABLE LEGAL ANSWER STYLING ────────── */
+.readable-answer-card {
+    background: var(--surface-1);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md);
+    padding: 20px 22px;
+    margin: 6px 0 14px;
+    font-family: var(--font-sans);
+    font-size: 0.92rem;
+    line-height: 1.75;
+    color: var(--text-primary);
+}
+
+.evidence-source-card-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    background: linear-gradient(90deg, rgba(37, 99, 235, 0.14) 0%, rgba(37, 99, 235, 0.04) 100%);
+    border: 1px solid rgba(59, 130, 246, 0.28);
+    border-left: 3px solid var(--blue-bright);
+    border-radius: 6px;
+    padding: 8px 12px;
+    margin: 16px 0 10px;
+}
+.evidence-source-card-header:first-child {
+    margin-top: 2px;
+}
+
+.evidence-source-icon {
+    font-size: 0.95rem;
+}
+
+.evidence-source-doc {
+    font-family: var(--font-mono);
+    font-size: 0.78rem;
+    font-weight: 700;
+    color: var(--blue-glow);
+    letter-spacing: 0.04em;
+}
+
+.evidence-source-page {
+    font-family: var(--font-mono);
+    font-size: 0.62rem;
+    font-weight: 700;
+    background: rgba(34, 197, 94, 0.14);
+    border: 1px solid rgba(34, 197, 94, 0.35);
+    color: #4ade80;
+    border-radius: 4px;
+    padding: 2px 7px;
+    letter-spacing: 0.06em;
+    margin-left: auto;
+}
+
+.statute-pill {
+    display: inline-block;
+    font-family: var(--font-mono);
+    font-size: 0.72rem;
+    font-weight: 700;
+    color: #fbbf24;
+    background: rgba(245, 158, 11, 0.14);
+    border: 1px solid rgba(245, 158, 11, 0.32);
+    border-radius: 4px;
+    padding: 1px 6px;
+    margin: 0 2px;
+}
+
+.timestamp-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-family: var(--font-mono);
+    font-size: 0.70rem;
+    font-weight: 700;
+    color: #67e8f9;
+    background: rgba(6, 182, 212, 0.12);
+    border: 1px solid rgba(6, 182, 212, 0.3);
+    border-radius: 4px;
+    padding: 2px 8px;
+    margin: 4px 4px 4px 0;
+}
+
+.timestamp-date {
+    font-family: var(--font-mono);
+    font-size: 0.68rem;
+    color: var(--text-muted);
+    font-style: italic;
+}
+
+.timeline-ts-row {
+    margin: 4px 0 2px;
+}
+
+.evidence-quote {
+    background: rgba(13, 17, 24, 0.75);
+    border-left: 3px solid var(--blue-primary);
+    border-radius: 0 6px 6px 0;
+    padding: 10px 16px;
+    margin: 10px 0 12px;
+    font-style: italic;
+    color: #f1f5f9;
+    line-height: 1.65;
+}
+
+.qa-badge-q {
+    font-family: var(--font-mono);
+    font-size: 0.76rem;
+    font-weight: 700;
+    color: var(--blue-glow);
+    background: rgba(37, 99, 235, 0.14);
+    border: 1px solid rgba(37, 99, 235, 0.28);
+    border-radius: 3px;
+    padding: 1px 5px;
+    margin-right: 4px;
+}
+
+.qa-badge-a {
+    font-family: var(--font-mono);
+    font-size: 0.76rem;
+    font-weight: 700;
+    color: #4ade80;
+    background: rgba(34, 197, 94, 0.14);
+    border: 1px solid rgba(34, 197, 94, 0.28);
+    border-radius: 3px;
+    padding: 1px 5px;
+    margin-right: 4px;
+}
+
+.finding-source-tag {
+    display: inline-block;
+    font-family: var(--font-mono);
+    font-size: 0.62rem;
+    font-weight: 600;
+    color: var(--blue-glow);
+    background: rgba(37, 99, 235, 0.14);
+    border: 1px solid rgba(59, 130, 246, 0.28);
+    border-radius: 4px;
+    padding: 1px 6px;
+    margin-right: 4px;
+}
+
+.citation-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    background: rgba(30, 41, 59, 0.85);
+    border: 1px solid rgba(59, 130, 246, 0.38);
+    border-radius: 4px;
+    padding: 2px 7px;
+    margin: 1px 3px;
+    vertical-align: middle;
+    font-size: 0.80rem;
+    line-height: 1.35;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25);
+    white-space: nowrap;
+}
+
+.citation-pill:hover {
+    border-color: rgba(96, 165, 250, 0.65);
+    background: rgba(30, 41, 59, 0.98);
+}
+
+.citation-icon {
+    font-size: 0.85rem;
+    opacity: 0.9;
+}
+
+.citation-doc {
+    font-family: var(--font-mono);
+    font-size: 0.74rem;
+    font-weight: 700;
+    color: var(--blue-glow);
+    letter-spacing: 0.02em;
+}
+
+.citation-divider {
+    color: var(--text-muted);
+    opacity: 0.45;
+    font-size: 0.70rem;
+    margin: 0 1px;
+}
+
+.citation-page {
+    font-family: var(--font-mono);
+    font-size: 0.66rem;
+    font-weight: 700;
+    color: #4ade80;
+    background: rgba(34, 197, 94, 0.12);
+    border: 1px solid rgba(34, 197, 94, 0.3);
+    border-radius: 3px;
+    padding: 1px 5px;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+}
+
+.passage-badge {
+    display: inline-flex;
+    align-items: center;
+    font-family: var(--font-mono);
+    font-size: 0.65rem;
+    font-weight: 700;
+    color: #c084fc;
+    background: rgba(168, 85, 247, 0.12);
+    border: 1px solid rgba(168, 85, 247, 0.3);
+    border-radius: 3px;
+    padding: 2px 6px;
+    margin-right: 5px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
 }
 
 /* ── SOURCE CARD ──────────────────────────── */
@@ -1128,6 +1670,38 @@ html, body, .stApp, [data-testid="stAppViewContainer"],
     opacity: 0.5;
 }
 
+/* ── BALANCED SPACING & LAYOUT (NO OVERLAPS) ── */
+[data-testid="stVerticalBlock"] {
+    gap: 0.8rem !important;
+}
+
+[data-testid="stHorizontalBlock"] {
+    gap: 0.65rem !important;
+}
+
+[data-testid="stSidebar"] [data-testid="stVerticalBlock"] {
+    gap: 0.65rem !important;
+}
+
+[data-testid="stFileUploader"] {
+    margin-bottom: 12px !important;
+}
+
+[data-testid="stSidebar"] .stButton {
+    margin-bottom: 4px !important;
+}
+
+[data-testid="stMetric"] {
+    background: var(--surface-1) !important;
+    border: 1px solid var(--border-subtle) !important;
+    border-radius: var(--radius-sm) !important;
+    padding: 8px 12px !important;
+}
+
+.stTabs [data-baseweb="tab-panel"] {
+    padding-top: 0.5rem !important;
+}
+
 </style>
 """, unsafe_allow_html=True)
 
@@ -1146,7 +1720,11 @@ if "api_key" not in st.session_state:
 if "llm_provider" not in st.session_state:
     st.session_state.llm_provider = DEFAULT_LLM_PROVIDER
 if "llm_model" not in st.session_state:
-    st.session_state.llm_model = OLLAMA_MODEL
+    st.session_state.llm_model = DEFAULT_GEMINI_MODEL if DEFAULT_LLM_PROVIDER == "gemini" else OLLAMA_MODEL
+
+# Automatically migrate deprecated model from existing browser session
+if st.session_state.get("llm_model") in ["gemini-2.5-flash", "models/gemini-2.5-flash"]:
+    st.session_state.llm_model = DEFAULT_GEMINI_MODEL
 if "history" not in st.session_state:
     st.session_state.history = []
 if "preset_query" not in st.session_state:
@@ -1259,10 +1837,30 @@ with st.sidebar:
             else:
                 st.caption(f"⚠️ {ollama_msg}")
     elif provider_choice == "gemini":
-        model_choice = st.text_input("Model", value="gemini-2.5-flash", label_visibility="collapsed")
-        api_key_input = st.text_input("API Key", value=st.session_state.api_key, type="password", label_visibility="collapsed", placeholder="API Key...")
+        gemini_model_options = [
+            "gemini-3.8-flash",
+            "gemini-2.0-flash",
+            "gemini-1.5-flash",
+            "gemini-2.5-flash-latest",
+            "Custom..."
+        ]
+        curr = st.session_state.get("llm_model", DEFAULT_GEMINI_MODEL)
+        if not curr or curr in ["gemini-2.5-flash", "models/gemini-2.5-flash", OLLAMA_MODEL]:
+            curr = DEFAULT_GEMINI_MODEL
+        idx = gemini_model_options.index(curr) if curr in gemini_model_options else len(gemini_model_options) - 1
+        sel_model = st.selectbox("Model", options=gemini_model_options, index=idx, label_visibility="collapsed")
+        if sel_model == "Custom...":
+            model_choice = st.text_input("Custom Model", value=(curr if curr not in gemini_model_options else DEFAULT_GEMINI_MODEL), label_visibility="collapsed")
+        else:
+            model_choice = sel_model
+
+        api_key_input = st.text_input("API Key", value=st.session_state.api_key, type="password", label_visibility="collapsed", placeholder="Enter Gemini API Key...")
         is_alive = True
         ollama_msg = ""
+        if api_key_input:
+            st.caption("✓ API Key configured (Auto-retry & failover active)")
+        else:
+            st.caption("⚠️ Gemini requires an API key")
     elif provider_choice == "openai":
         model_choice = st.text_input("Model", value="gpt-4o-mini", label_visibility="collapsed")
         api_key_input = st.text_input("API Key", value=st.session_state.api_key, type="password", label_visibility="collapsed", placeholder="API Key...")
@@ -1331,6 +1929,22 @@ with st.sidebar:
     <div class="sb-stat"><span class="sb-stat-label">Top-K</span><span class="sb-stat-value">{top_k}</span></div>
     """, unsafe_allow_html=True)
 
+
+# ─────────────────────────────────────────────
+# SYNCHRONIZE ACTIVE SERVICES WITH SIDEBAR SELECTIONS
+# ─────────────────────────────────────────────
+embedding_service = EmbeddingService(
+    provider=st.session_state.embedding_provider,
+    api_key=st.session_state.api_key
+)
+retriever = RAGRetriever(st.session_state.vector_store, embedding_service)
+llm_service = LLMService(
+    provider=st.session_state.llm_provider,
+    model_name=st.session_state.llm_model,
+    api_key=st.session_state.api_key,
+    base_url=OLLAMA_BASE_URL
+)
+agent = LegalResearchAgent(retriever, llm_service)
 
 # ─────────────────────────────────────────────
 # TOP BAR
@@ -1555,60 +2169,102 @@ with tab_research:
         retrieved_chunk_cnt = int(runtime_metrics.get("retrieved_chunk_count", len(state.retrieved_chunks)))
         retrieved_doc_cnt = int(runtime_metrics.get("retrieved_distinct_document_count", len({c.document_name for c in state.retrieved_chunks})))
 
-        st.html('<div class="section-label-blue">Agent Workflow Pipeline</div>')
-        st.html(f"""
-        <div class="pipeline-container">
-            <div class="pipeline-node step-1">
-                <div class="pipeline-dot completed"></div>
-                <div class="pipeline-label">Query</div>
-                <div class="pipeline-value">Received</div>
-            </div>
-            <div class="pipeline-connector conn-1"></div>
-            <div class="pipeline-node step-2">
-                <div class="pipeline-dot completed"></div>
-                <div class="pipeline-label">Intent</div>
-                <div class="pipeline-value">{html.escape(intent_val.replace('_', ' ').title())}</div>
-            </div>
-            <div class="pipeline-connector conn-2"></div>
-            <div class="pipeline-node step-3">
-                <div class="pipeline-dot {retrieval_status}"></div>
-                <div class="pipeline-label">Retrieval</div>
-                <div class="pipeline-value">{unique_cited_docs} doc(s) ({cited_chunks_cnt} cited)</div>
-            </div>
-            <div class="pipeline-connector conn-3"></div>
-            <div class="pipeline-node step-4">
-                <div class="pipeline-dot {evidence_status}"></div>
-                <div class="pipeline-label">Evidence</div>
-                <div class="pipeline-value">{html.escape(strength)}</div>
-            </div>
-            <div class="pipeline-connector conn-4"></div>
-            <div class="pipeline-node step-5">
-                <div class="pipeline-dot {specialist_status}"></div>
-                <div class="pipeline-label">Specialists</div>
-                <div class="pipeline-value">{specialist_count} active</div>
-            </div>
-            <div class="pipeline-connector conn-5"></div>
-            <div class="pipeline-node step-6">
-                <div class="pipeline-dot {answer_status}"></div>
-                <div class="pipeline-label">Answer</div>
-                <div class="pipeline-value">{"Validated" if ans else "Raw"}</div>
-            </div>
-        </div>
-        """)
+        specialist_selected = int(runtime_metrics.get("specialist_agents_selected", specialist_count))
+        status_text = "Analysis Complete" if state.status == "Completed" else state.status
+        status_badge_class = "success" if state.status == "Completed" else "warning"
+        status_icon = "&#10003;" if state.status == "Completed" else "&#9679;"
 
-        metric_cols = st.columns(4)
-        metric_cols[0].metric("Total runtime", f"{runtime_metrics.get('total_duration_seconds', 0):.2f}s")
-        metric_cols[1].metric("Retrieved chunks", f"{retrieved_chunk_cnt} ({retrieved_doc_cnt} docs)")
-        specialist_selected = int(runtime_metrics.get("specialist_agents_selected", 0))
-        metric_cols[2].metric("Agents completed", f"{specialist_count}/{specialist_selected}")
-        metric_cols[3].metric("Citations", f"{cited_chunks_cnt} ({unique_cited_docs} docs)")
-
-        # Meta pills
         st.html(f"""
-        <div class="meta-pills">
-            <span class="pill pill-intent">Intent: {html.escape(intent_val.replace('_', ' '))}</span>
-            <span class="pill {strength_class}">Evidence: {html.escape(strength)}</span>
-            <span class="pill pill-sources">Sources: {unique_cited_docs} document(s) ({cited_chunks_cnt} chunks)</span>
+        <div class="workflow-card">
+            <div class="workflow-header-row">
+                <div class="workflow-header-left">
+                    <span class="workflow-live-pulse"></span>
+                    <span class="workflow-header-title">Agent Workflow Pipeline</span>
+                </div>
+                <div class="workflow-header-right">
+                    <span class="workflow-status-badge {status_badge_class}">
+                        {status_icon} {status_text} &bull; {runtime_metrics.get('total_duration_seconds', 0):.2f}s
+                    </span>
+                </div>
+            </div>
+
+            <div class="pipeline-track">
+                <!-- Step 1: Query -->
+                <div class="pipeline-stage">
+                    <div class="stage-badge completed">&#10003;</div>
+                    <div class="stage-name">Query</div>
+                    <div class="stage-value">Received</div>
+                </div>
+
+                <div class="stage-connector active"></div>
+
+                <!-- Step 2: Intent -->
+                <div class="pipeline-stage">
+                    <div class="stage-badge completed">&#10003;</div>
+                    <div class="stage-name">Intent</div>
+                    <div class="stage-value">{html.escape(intent_val.replace('_', ' ').title())}</div>
+                </div>
+
+                <div class="stage-connector {retrieval_status}"></div>
+
+                <!-- Step 3: Retrieval -->
+                <div class="pipeline-stage">
+                    <div class="stage-badge {retrieval_status}">{"&#10003;" if retrieval_status == "completed" else "!"}</div>
+                    <div class="stage-name">Retrieval</div>
+                    <div class="stage-value">{unique_cited_docs} doc(s) ({cited_chunks_cnt} cited)</div>
+                </div>
+
+                <div class="stage-connector {evidence_status}"></div>
+
+                <!-- Step 4: Evidence -->
+                <div class="pipeline-stage">
+                    <div class="stage-badge {evidence_status}">{"&#10003;" if evidence_status == "completed" else "!"}</div>
+                    <div class="stage-name">Evidence</div>
+                    <div class="stage-value">{html.escape(strength)}</div>
+                </div>
+
+                <div class="stage-connector {specialist_status}"></div>
+
+                <!-- Step 5: Specialists -->
+                <div class="pipeline-stage">
+                    <div class="stage-badge {specialist_status}">{"&#10003;" if specialist_status == "completed" else "!"}</div>
+                    <div class="stage-name">Specialists</div>
+                    <div class="stage-value">{specialist_count} active</div>
+                </div>
+
+                <div class="stage-connector {answer_status}"></div>
+
+                <!-- Step 6: Answer -->
+                <div class="pipeline-stage">
+                    <div class="stage-badge {answer_status}">{"&#10003;" if answer_status == "completed" else "!"}</div>
+                    <div class="stage-name">Answer</div>
+                    <div class="stage-value">{"Validated" if ans else "Raw"}</div>
+                </div>
+            </div>
+
+            <div class="workflow-footer-strip">
+                <div class="wf-stat-chip">
+                    <span class="wf-stat-label">RUNTIME</span>
+                    <span class="wf-stat-value">{runtime_metrics.get('total_duration_seconds', 0):.2f}s</span>
+                </div>
+                <div class="wf-stat-chip">
+                    <span class="wf-stat-label">RETRIEVED</span>
+                    <span class="wf-stat-value">{retrieved_chunk_cnt} chunks ({retrieved_doc_cnt} docs)</span>
+                </div>
+                <div class="wf-stat-chip">
+                    <span class="wf-stat-label">AGENTS</span>
+                    <span class="wf-stat-value">{specialist_count}/{specialist_selected} completed</span>
+                </div>
+                <div class="wf-stat-chip">
+                    <span class="wf-stat-label">CITATIONS</span>
+                    <span class="wf-stat-value">{cited_chunks_cnt} cited ({unique_cited_docs} docs)</span>
+                </div>
+                <div class="wf-stat-spacer"></div>
+                <div class="wf-pill-group">
+                    <span class="pill pill-intent">Intent: {html.escape(intent_val.replace('_', ' '))}</span>
+                    <span class="pill {strength_class}">Evidence: {html.escape(strength)}</span>
+                </div>
+            </div>
         </div>
         """)
 
@@ -1619,6 +2275,7 @@ with tab_research:
                 norm_disp_html = f'<div style="font-size:0.82rem;color:var(--blue-glow);margin-top:4px;font-family:var(--font-mono);"><span style="color:var(--text-muted);">Normalized:</span> {html.escape(state.normalized_query)}</div>'
 
             clean_query = html.escape(state.query)
+            formatted_answer = format_readable_answer(ans.answer)
             st.html(f"""
             <div class="answer-surface" style="padding-bottom: 8px;">
                 <div class="result-header">
@@ -1634,7 +2291,10 @@ with tab_research:
                 </div>
             </div>
             """)
-            st.markdown(ans.answer)
+            st.markdown(
+                f'<div class="readable-answer-card">{formatted_answer}</div>',
+                unsafe_allow_html=True
+            )
 
             # Key Findings + Evidence in columns
             col_findings, col_evidence = st.columns(2)
@@ -1643,10 +2303,11 @@ with tab_research:
                 st.html('<div class="section-label-blue">Key Legal Findings</div>')
                 findings_html = '<div class="findings-container">'
                 for idx, f in enumerate(ans.key_findings, 1):
+                    formatted_f = format_finding_item(f)
                     findings_html += f"""
                     <div class="finding-row">
                         <div class="finding-num">{idx:02d}</div>
-                        <div class="finding-text">{html.escape(f)}</div>
+                        <div class="finding-text">{formatted_f}</div>
                     </div>"""
                 findings_html += '</div>'
                 st.html(findings_html)
@@ -1655,10 +2316,11 @@ with tab_research:
                 st.html('<div class="section-label-blue">Evidence & Witness Summary</div>')
                 evidence_html = '<div class="findings-container">'
                 for idx, e in enumerate(ans.evidence_summary, 1):
+                    formatted_e = format_finding_item(e)
                     evidence_html += f"""
                     <div class="finding-row">
                         <div class="finding-num">{idx:02d}</div>
-                        <div class="finding-text">{html.escape(e)}</div>
+                        <div class="finding-text">{formatted_e}</div>
                     </div>"""
                 evidence_html += '</div>'
                 st.html(evidence_html)
@@ -1668,10 +2330,11 @@ with tab_research:
                 st.html('<div class="section-label">Limitations & Unknowns</div>')
                 lim_html = '<div class="findings-container">'
                 for idx, lim in enumerate(ans.limitations, 1):
+                    formatted_l = format_finding_item(lim)
                     lim_html += f"""
                     <div class="finding-row">
                         <div class="finding-num" style="color:var(--text-muted);">{idx:02d}</div>
-                        <div class="finding-text" style="color:var(--text-secondary);">{html.escape(lim)}</div>
+                        <div class="finding-text" style="color:var(--text-secondary);">{formatted_l}</div>
                     </div>"""
                 lim_html += '</div>'
                 st.html(lim_html)
@@ -1679,14 +2342,17 @@ with tab_research:
         else:
             # Fallback for non-structured answer
             clean_query = html.escape(state.query)
-            clean_fallback = html.escape(state.final_answer or state.response or "").replace("\n\n", "<br><br>").replace("\n", "<br>")
+            clean_fallback = format_readable_answer(state.final_answer or state.response or "")
             st.html(f"""
             <div class="answer-surface">
                 <div class="answer-label">Research Response</div>
                 <div style="margin-top:4px;font-size:1rem;font-weight:600;color:var(--text-primary);">{clean_query}</div>
-                <div class="answer-text" style="margin-top:16px;">{clean_fallback}</div>
             </div>
             """)
+            st.markdown(
+                f'<div class="readable-answer-card">{clean_fallback}</div>',
+                unsafe_allow_html=True
+            )
 
         # ─── SOURCES ─────────────────────────
         with st.expander(f"EVIDENCE SOURCES  [{unique_cited_docs} unique document(s), {cited_chunks_cnt} chunk(s) cited; {retrieved_chunk_cnt} retrieved]"):
@@ -1876,23 +2542,33 @@ with tab_history:
 
                 if h_ans:
                     # Structured answer
+                    formatted_h_ans = format_readable_answer(str(h_ans.get('answer', '')))
                     st.markdown(f"""
                     <div class="answer-surface" style="margin-top:12px;">
                         <div class="answer-label">Response</div>
-                        <div class="answer-text" style="margin-top:8px;">{html.escape(str(h_ans.get('answer', '')))}</div>
                     </div>
+                    <div class="readable-answer-card" style="margin-top:8px;">{formatted_h_ans}</div>
                     """, unsafe_allow_html=True)
 
                     if h_ans.get("key_findings"):
                         st.markdown('<div class="section-label" style="margin-top:16px;">Key Findings</div>', unsafe_allow_html=True)
                         findings_html = ""
                         for f_idx, kf in enumerate(h_ans.get("key_findings"), 1):
+                            formatted_kf = format_finding_item(kf)
                             findings_html += f"""
                             <div class="finding-row">
                                 <div class="finding-num">{f_idx:02d}</div>
-                                <div class="finding-text">{kf}</div>
+                                <div class="finding-text">{formatted_kf}</div>
                             </div>"""
                         st.markdown(findings_html, unsafe_allow_html=True)
+                elif h_state.final_answer or h_state.response:
+                    fallback_h_ans = format_readable_answer(h_state.final_answer or h_state.response or "")
+                    st.markdown(f"""
+                    <div class="answer-surface" style="margin-top:12px;">
+                        <div class="answer-label">Response</div>
+                    </div>
+                    <div class="readable-answer-card" style="margin-top:8px;">{fallback_h_ans}</div>
+                    """, unsafe_allow_html=True)
 
                 # Sources
                 if h_state.sources:
