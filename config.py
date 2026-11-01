@@ -27,12 +27,20 @@ DEFAULT_VECTOR_STORE_BACKEND = os.getenv("VECTOR_STORE_BACKEND", "chroma").strip
 # LLM & Embedding Settings
 DEFAULT_LLM_PROVIDER = os.getenv("LLM_PROVIDER", "ollama")  # options: ollama, gemini, openai, local
 DEFAULT_LLM_MODEL = os.getenv("LLM_MODEL", os.getenv("OLLAMA_MODEL", "qwen2.5:1.5b"))
+DEFAULT_GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.8-flash")
 DEFAULT_EMBEDDING_PROVIDER = os.getenv("EMBEDDING_PROVIDER", "local")  # options: local, gemini, openai
 
 # Ollama Settings
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen2.5:1.5b")
 
+# Helper to avoid treating placeholder template values as valid keys
+def _clean_env_key(val: str) -> str:
+    cleaned = (val or "").strip()
+    if cleaned.lower().startswith("your_") or "here" in cleaned.lower():
+        return ""
+    return cleaned
+
 # API Keys
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", os.getenv("GOOGLE_API_KEY", ""))
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
+GEMINI_API_KEY = _clean_env_key(os.getenv("GEMINI_API_KEY", os.getenv("GOOGLE_API_KEY", "")))
+OPENAI_API_KEY = _clean_env_key(os.getenv("OPENAI_API_KEY", ""))
