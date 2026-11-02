@@ -35,29 +35,97 @@ class LLMService:
         contents: Any,
         max_retries_per_model: int = 1
     ) -> Tuple[Any, str]:
-        """Call Gemini generate_content with immediate failover to supported fallback models."""
+        """Call Gemini generate_content with dynamic model discovery and cascade failover across supported models."""
         primary = LLMService.resolve_gemini_model(primary_model)
-        candidates = [primary]
-        for fallback in ["gemini-1.5-flash", "gemini-2.0-flash"]:
-            if fallback not in candidates:
-                candidates.append(fallback)
+
+        # 1. Extract API key for potential v1 fallback client
+        api_key = getattr(getattr(client, "_api_client", None), "api_key", None)
+
+        # 2. Dynamic Model Discovery via client.models.list()
+        discovered: List[str] = []
+        try:
+            if hasattr(client, "models") and hasattr(client.models, "list"):
+                for m in client.models.list():
+                    actions = getattr(m, "supported_actions", []) or getattr(m, "supported_generation_methods", []) or []
+                    name = getattr(m, "name", "")
+                    if (not actions or "generateContent" in actions or any("generate" in str(a).lower() for a in actions)) and name:
+                        clean_name = name[7:] if name.startswith("models/") else name
+                        discovered.append(clean_name)
+        except Exception:
+            discovered = []
+
+        # 3. Build comprehensive candidate cascade
+        candidates: List[str] = []
+        if primary:
+            candidates.append(primary)
+            if primary == "gemini-1.5-flash" and "gemini-1.5-flash-latest" not in candidates:
+                candidates.append("gemini-1.5-flash-latest")
+
+        priority_models = [
+            "gemini-2.0-flash",
+            "gemini-2.0-flash-exp",
+            "gemini-1.5-flash-latest",
+            "gemini-1.5-flash-001",
+            "gemini-1.5-flash-002",
+            "gemini-1.5-flash",
+            "gemini-1.5-flash-8b",
+            "gemini-1.5-pro",
+            "gemini-1.5-pro-latest",
+            "gemini-2.0-pro-exp",
+        ]
+
+        # Prioritize discovered models first if available
+        if discovered:
+            for pm in priority_models:
+                if pm in discovered and pm not in candidates:
+                    candidates.append(pm)
+            for d in discovered:
+                if d not in candidates and "gemini" in d.lower():
+                    candidates.append(d)
+
+        # Append remaining curated fallback models
+        for pm in priority_models:
+            if pm not in candidates:
+                candidates.append(pm)
 
         last_error = None
-        for model in candidates:
+        clients_to_try = [client]
+
+        # If API key is available, prepare a v1 client in case v1beta rejects 1.5 models with 404
+        if api_key:
             try:
-                res = client.models.generate_content(
-                    model=model,
-                    contents=contents
-                )
-                return res, model
-            except Exception as e:
-                last_error = e
-                err_str = str(e).lower()
-                is_transient = any(kw in err_str for kw in ["503", "unavailable", "high demand", "429", "resource_exhausted", "not found", "404"])
-                if is_transient:
-                    # Immediately failover to next model in cascade without delaying
-                    continue
-                break
+                from google import genai
+                from google.genai.types import HttpOptions
+                v1_client = genai.Client(api_key=api_key, http_options=HttpOptions(api_version="v1"))
+                clients_to_try.append(v1_client)
+            except Exception:
+                pass
+
+        for active_client in clients_to_try:
+            for model in candidates:
+                for _ in range(max_retries_per_model):
+                    try:
+                        res = active_client.models.generate_content(
+                            model=model,
+                            contents=contents
+                        )
+                        return res, model
+                    except Exception as e:
+                        last_error = e
+                        err_str = str(e).lower()
+                        is_transient = any(
+                            kw in err_str for kw in [
+                                "503", "unavailable", "high demand", "429",
+                                "resource_exhausted", "not found", "404",
+                                "is not found for api version"
+                            ]
+                        )
+                        if is_transient:
+                            # Immediately failover to next model without delaying
+                            break
+                        # Non-transient error (e.g. fatal 400/403 invalid API key), raise immediately
+                        raise e
+
         if last_error:
             raise last_error
         raise RuntimeError("No response from Gemini candidate models.")
@@ -231,7 +299,12 @@ class LLMService:
                 raw_content = res.text.strip() if res and res.text else ""
                 return self._parse_and_validate_json(raw_content, query, intent_str, sources_list, retrieved_chunks, norm_query_str)
             except Exception as e:
-                error_msg = f"Gemini API invocation failed: {str(e)}"
+                raw_err = str(e).strip()
+                if "{" in raw_err and "message" in raw_err:
+                    msg_match = re.search(r"['\"]message['\"]\s*:\s*['\"]([^'\"]+)['\"]", raw_err)
+                    if msg_match:
+                        raw_err = msg_match.group(1)
+                error_msg = f"Gemini API Notice: {raw_err}"
                 return self._build_fallback_answer(query, intent_str, retrieved_chunks, error_msg, norm_query_str), "", error_msg
 
         # ─────────────────────────────────────────────

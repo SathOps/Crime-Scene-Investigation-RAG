@@ -2152,7 +2152,10 @@ with tab_research:
 
         # Validation notice
         if state.validation_error:
-            st.warning(f"Structured output validation: {state.validation_error}")
+            if any(term in state.validation_error.lower() for term in ["api notice", "api invocation", "ollama error", "service temporarily"]):
+                st.warning(f"Provider Notice: {state.validation_error}")
+            else:
+                st.warning(f"Structured output validation: {state.validation_error}")
 
         # Runtime metrics are measured by the workflow, not estimated.
         runtime_metrics = getattr(state, "metrics", {}) or {}
