@@ -51,6 +51,8 @@ importlib.reload(rag.retriever)
 from rag.retriever import RAGRetriever
 from rag.evaluation import evaluate_retrieval, benchmark_retrieval, DEFAULT_LEGAL_EVALUATION_CASES
 from rag.benchmark import compare_llm_only_vs_rag
+import llm.llm_service
+importlib.reload(llm.llm_service)
 from llm.llm_service import LLMService
 import agent.timeline_pipeline
 importlib.reload(agent.timeline_pipeline)

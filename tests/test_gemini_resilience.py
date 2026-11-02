@@ -69,3 +69,4 @@ def test_gemini_multi_error_cascade():
     assert res.text == "Success from exp model"
     assert "gemini-2.0-flash" in attempted
     assert "gemini-2.0-flash-exp" in attempted
+

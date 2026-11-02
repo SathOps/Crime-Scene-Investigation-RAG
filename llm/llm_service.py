@@ -17,14 +17,14 @@ class LLMService:
 
     @staticmethod
     def resolve_gemini_model(model_name: Optional[str] = None) -> str:
-        """Resolve and normalize Gemini model names, migrating deprecated 2.5 or invalid models to modern supported versions."""
+        """Resolve and normalize Gemini model names, migrating deprecated or invalid models to modern supported versions."""
         fallback = DEFAULT_GEMINI_MODEL or "gemini-2.0-flash"
-        if not model_name or model_name in {OLLAMA_MODEL, "gemini-2.5-flash", "models/gemini-2.5-flash", "gemini-3.8-flash"}:
+        if not model_name:
             return fallback
         clean = model_name.strip()
         if clean.startswith("models/"):
             clean = clean[len("models/"):]
-        if clean in {"gemini-2.5-flash", "gemini-3.8-flash"} or clean.startswith("gemini-2.5"):
+        if clean in {OLLAMA_MODEL, "gemini-2.5-flash", "gemini-3.8-flash"} or "3.8" in clean or clean.startswith("gemini-2.5"):
             return fallback
         return clean
 
@@ -33,13 +33,14 @@ class LLMService:
         client: Any,
         primary_model: Optional[str],
         contents: Any,
+        api_key: Optional[str] = None,
         max_retries_per_model: int = 1
     ) -> Tuple[Any, str]:
         """Call Gemini generate_content with dynamic model discovery and cascade failover across supported models."""
         primary = LLMService.resolve_gemini_model(primary_model)
 
         # 1. Extract API key for potential v1 fallback client
-        api_key = getattr(getattr(client, "_api_client", None), "api_key", None)
+        resolved_key = api_key or getattr(getattr(client, "_api_client", None), "api_key", None)
 
         # 2. Dynamic Model Discovery via client.models.list()
         discovered: List[str] = []
@@ -92,11 +93,11 @@ class LLMService:
         clients_to_try = [client]
 
         # If API key is available, prepare a v1 client in case v1beta rejects 1.5 models with 404
-        if api_key:
+        if resolved_key:
             try:
                 from google import genai
                 from google.genai.types import HttpOptions
-                v1_client = genai.Client(api_key=api_key, http_options=HttpOptions(api_version="v1"))
+                v1_client = genai.Client(api_key=resolved_key, http_options=HttpOptions(api_version="v1"))
                 clients_to_try.append(v1_client)
             except Exception:
                 pass
@@ -113,6 +114,17 @@ class LLMService:
                     except Exception as e:
                         last_error = e
                         err_str = str(e).lower()
+                        # If 404 is specifically about v1beta rejecting this model, try v1 client directly
+                        if "is not found for api version v1beta" in err_str and resolved_key:
+                            try:
+                                from google import genai
+                                from google.genai.types import HttpOptions
+                                v1_retry_client = genai.Client(api_key=resolved_key, http_options=HttpOptions(api_version="v1"))
+                                res = v1_retry_client.models.generate_content(model=model, contents=contents)
+                                return res, model
+                            except Exception:
+                                pass
+
                         is_transient = any(
                             kw in err_str for kw in [
                                 "503", "unavailable", "high demand", "429",
@@ -294,7 +306,8 @@ class LLMService:
                 res, used_model = self._call_gemini_with_fallback_and_retry(
                     client=client,
                     primary_model=self.model_name,
-                    contents=prompt_text
+                    contents=prompt_text,
+                    api_key=self.api_key
                 )
                 raw_content = res.text.strip() if res and res.text else ""
                 return self._parse_and_validate_json(raw_content, query, intent_str, sources_list, retrieved_chunks, norm_query_str)
@@ -937,6 +950,7 @@ class LLMService:
                 client=client,
                 primary_model=self.model_name,
                 contents=f"SYSTEM INSTRUCTIONS:\n{system_prompt}\n\nUSER TASK:\n{user_prompt}",
+                api_key=self.api_key
             )
             result = (getattr(response, "text", None) or "").strip()
             if not result:
