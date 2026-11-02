@@ -132,7 +132,7 @@ def select_evidence_for_intent(chunks: List[DocumentChunk], intent: Any, query: 
     return chunks
 
 
-MAX_TOOL_ITERATIONS = 5
+MAX_TOOL_ITERATIONS = 2
 
 class LegalResearchAgent:
     """Central Agent for Legal Case Research featuring Intelligent Preprocessing
@@ -175,6 +175,13 @@ class LegalResearchAgent:
             )
             return ""
 
+        if self.llm_service.provider == "ollama":
+            is_alive, msg = self.llm_service.check_ollama_status(self.llm_service.model_name)
+            if not is_alive and "not found" not in msg:
+                state.metrics["tool_loop_status"] = "skipped"
+                state.metrics["tool_loop_reason"] = f"Ollama is unreachable: {msg}"
+                return ""
+
         try:
             chat_model = self.llm_service.get_chat_model()
             llm_with_tools = chat_model.bind_tools(self.tools)
@@ -184,7 +191,7 @@ class LegalResearchAgent:
             state.metrics["tool_loop_reason"] = f"{type(e).__name__}: {e}"
             return ""
 
-        compact_evidence = (evidence_context[:8000] + "\n[Context preview for tool routing...]") if evidence_context and len(evidence_context) > 8000 else (evidence_context or "No evidence supplied.")
+        compact_evidence = (evidence_context[:2500] + "\n[Context preview for tool routing...]") if evidence_context and len(evidence_context) > 2500 else (evidence_context or "No evidence supplied.")
         system_msg = SystemMessage(content=(
             "You are an expert Legal Research Agent. Analyze legal case questions, determine if specialized tools "
             "like `retrieve_case_evidence`, `extract_timeline_events`, `analyze_witness_contradictions`, or "

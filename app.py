@@ -1722,9 +1722,9 @@ if "llm_provider" not in st.session_state:
 if "llm_model" not in st.session_state:
     st.session_state.llm_model = DEFAULT_GEMINI_MODEL if DEFAULT_LLM_PROVIDER == "gemini" else OLLAMA_MODEL
 
-# Automatically migrate deprecated model from existing browser session
-if st.session_state.get("llm_model") in ["gemini-2.5-flash", "models/gemini-2.5-flash"]:
-    st.session_state.llm_model = DEFAULT_GEMINI_MODEL
+# Automatically migrate deprecated or non-existent models from existing browser session
+if st.session_state.get("llm_model") in ["gemini-2.5-flash", "models/gemini-2.5-flash", "gemini-3.8-flash", "models/gemini-3.8-flash"]:
+    st.session_state.llm_model = "gemini-2.0-flash"
 if "history" not in st.session_state:
     st.session_state.history = []
 if "preset_query" not in st.session_state:
@@ -1833,24 +1833,23 @@ with st.sidebar:
         is_alive, ollama_msg = LLMService.check_ollama_status(model_choice)
         if ollama_msg:
             if is_alive:
-                st.caption(f"✓ {ollama_msg}")
+                st.caption(f"✓ {ollama_msg} (Context capped at 2k to prevent heating)")
             else:
-                st.caption(f"⚠️ {ollama_msg}")
+                st.caption(f"⚠️ {ollama_msg} — Switch to 'local' for instant heat-free RAG")
     elif provider_choice == "gemini":
         gemini_model_options = [
-            "gemini-3.8-flash",
             "gemini-2.0-flash",
             "gemini-1.5-flash",
-            "gemini-2.5-flash-latest",
+            "gemini-1.5-pro",
             "Custom..."
         ]
-        curr = st.session_state.get("llm_model", DEFAULT_GEMINI_MODEL)
-        if not curr or curr in ["gemini-2.5-flash", "models/gemini-2.5-flash", OLLAMA_MODEL]:
-            curr = DEFAULT_GEMINI_MODEL
-        idx = gemini_model_options.index(curr) if curr in gemini_model_options else len(gemini_model_options) - 1
+        curr = st.session_state.get("llm_model", "gemini-2.0-flash")
+        if not curr or curr in ["gemini-2.5-flash", "models/gemini-2.5-flash", "gemini-3.8-flash", OLLAMA_MODEL]:
+            curr = "gemini-2.0-flash"
+        idx = gemini_model_options.index(curr) if curr in gemini_model_options else 0
         sel_model = st.selectbox("Model", options=gemini_model_options, index=idx, label_visibility="collapsed")
         if sel_model == "Custom...":
-            model_choice = st.text_input("Custom Model", value=(curr if curr not in gemini_model_options else DEFAULT_GEMINI_MODEL), label_visibility="collapsed")
+            model_choice = st.text_input("Custom Model", value=(curr if curr not in gemini_model_options else "gemini-2.0-flash"), label_visibility="collapsed")
         else:
             model_choice = sel_model
 
@@ -1858,9 +1857,9 @@ with st.sidebar:
         is_alive = True
         ollama_msg = ""
         if api_key_input:
-            st.caption("✓ API Key configured (Auto-retry & failover active)")
+            st.caption("✓ Google Cloud active (1-2s cloud inference, 0% local heat)")
         else:
-            st.caption("⚠️ Gemini requires an API key")
+            st.caption("⚠️ Gemini requires an API key — or switch to 'local' mode")
     elif provider_choice == "openai":
         model_choice = st.text_input("Model", value="gpt-4o-mini", label_visibility="collapsed")
         api_key_input = st.text_input("API Key", value=st.session_state.api_key, type="password", label_visibility="collapsed", placeholder="API Key...")
@@ -1871,6 +1870,7 @@ with st.sidebar:
         api_key_input = ""
         is_alive = True
         ollama_msg = ""
+        st.caption("⚡ Fast deterministic local RAG (Instant <0.1s, 0% CPU heat)")
 
     st.session_state.llm_model = model_choice
     st.session_state.api_key = api_key_input
@@ -2077,12 +2077,12 @@ with tab_research:
 
     # ─── EXECUTE RESEARCH ─────────────────────
     if submit_btn:
-        st.session_state.preset_query = ""
         if not user_query or not user_query.strip():
             st.warning("Please enter a valid research question.")
         elif stats['total_chunks'] == 0 and not is_standalone_hypothetical_query(user_query):
             st.warning("Knowledge base is empty. Upload documents or load samples from the sidebar, or ask a clearly self-contained hypothetical question.")
         else:
+            st.session_state.preset_query = user_query
             # Live workflow progress: update the status as real pipeline stages finish.
             with st.status("AGENT WORKFLOW IN PROGRESS...", expanded=True) as status_container:
                 progress_line = st.empty()

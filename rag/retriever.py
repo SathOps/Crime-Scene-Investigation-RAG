@@ -8,7 +8,10 @@ STOP_WORDS = {
     "the", "a", "an", "is", "are", "was", "were", "in", "on", "at", "to", "for", 
     "of", "and", "or", "it", "this", "that", "what", "which", "who", "when", 
     "where", "how", "why", "did", "does", "do", "have", "has", "had", "be", 
-    "been", "being", "with", "as", "by", "from", "at", "about", "into", "through"
+    "been", "being", "with", "as", "by", "from", "at", "about", "into", "through",
+    "very", "short", "brief", "briefly", "give", "tell", "me", "can", "you", "please",
+    "show", "want", "like", "know", "look", "would", "could", "i", "my", "we", "our",
+    "just", "also", "all", "any", "some", "much", "many", "more", "most", "so"
 }
 
 class RAGRetriever:
@@ -180,22 +183,31 @@ class RAGRetriever:
         )
 
         # Insufficient threshold: off-topic or absent record questions have poor overlap and no entity match
+        is_summary_query = any(term in q_lower for term in ("case summary", "summary", "overview", "what happened", "facts", "allegation", "brief")) or (intent and "CASE_SUMMARY" in intent.upper())
+        has_summary_context = any(
+            any(k in c.text.lower() for k in ("case summary", "facts", "accused", "incident", "charges", "allegation", "fir", "complaint", "deceased", "offence", "prosecution"))
+            for c in deduped_chunks
+        )
+
         if is_timeline_query and has_temporal_density:
             # Timeline query with substantive temporal markers must not be rejected on keyword mismatch alone
             if max_score >= 0.50 or avg_score >= 0.40 or timestamps_count >= 3:
                 strength = "High" if (max_score >= 0.60 or timestamps_count >= 4) else "Medium"
             else:
                 strength = "Low"
-        elif is_contradiction_query and has_witness_context and max_score >= 0.38:
+        elif is_contradiction_query and has_witness_context and max_score >= 0.35:
             # Contradiction query with witness context must not be rejected on missing lexical tokens
             strength = "High" if (max_score >= 0.60 or avg_score >= 0.45) else "Medium"
-        elif max_score < 0.40 or (best_term_ratio < 0.25 and not has_entity_match and max_score < 0.52 and max_vec_score < 0.65):
+        elif is_summary_query and has_summary_context and (max_score >= 0.28 or max_vec_score >= 0.28):
+            # Case summary queries with matching FIR/Judgment facts should not be rejected
+            strength = "High" if (max_score >= 0.55 or avg_score >= 0.40) else ("Medium" if (max_score >= 0.34 or avg_score >= 0.28) else "Low")
+        elif max_score < 0.28 or (best_term_ratio == 0.0 and not has_entity_match and max_score < 0.35 and max_vec_score < 0.35):
             strength = "Insufficient"
-        elif max_score >= 0.65 or avg_score >= 0.50:
+        elif max_score >= 0.60 or avg_score >= 0.48:
             strength = "High"
-        elif max_score >= 0.46 or avg_score >= 0.38:
+        elif max_score >= 0.40 or avg_score >= 0.32:
             strength = "Medium"
-        elif max_score >= 0.40:
+        elif max_score >= 0.28:
             strength = "Low"
         else:
             strength = "Insufficient"
@@ -238,7 +250,7 @@ class RAGRetriever:
         q_lower = (query or "").lower()
         sub_queries: List[str] = []
 
-        if any(term in q_lower for term in ("what happened", "case summary", "facts of the case", "overview", "prosecution", "connects the accused")):
+        if any(term in q_lower for term in ("what happened", "case summary", "summary", "overview", "facts", "prosecution", "connects the accused", "allegation")) or (intent and "CASE_SUMMARY" in intent.upper()):
             sub_queries.extend([
                 "prosecution case summary allegations incident facts charges evidence",
                 "brief facts of the case incident FIR complaint investigation findings",

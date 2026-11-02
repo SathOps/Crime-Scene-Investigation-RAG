@@ -27,7 +27,7 @@ DEFAULT_VECTOR_STORE_BACKEND = os.getenv("VECTOR_STORE_BACKEND", "chroma").strip
 # LLM & Embedding Settings
 DEFAULT_LLM_PROVIDER = os.getenv("LLM_PROVIDER", "ollama")  # options: ollama, gemini, openai, local
 DEFAULT_LLM_MODEL = os.getenv("LLM_MODEL", os.getenv("OLLAMA_MODEL", "qwen2.5:1.5b"))
-DEFAULT_GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.8-flash")
+DEFAULT_GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
 DEFAULT_EMBEDDING_PROVIDER = os.getenv("EMBEDDING_PROVIDER", "local")  # options: local, gemini, openai
 
 # Ollama Settings

@@ -17,14 +17,14 @@ class LLMService:
 
     @staticmethod
     def resolve_gemini_model(model_name: Optional[str] = None) -> str:
-        """Resolve and normalize Gemini model names, migrating deprecated 2.5 models to modern supported versions."""
-        fallback = DEFAULT_GEMINI_MODEL or "gemini-3.8-flash"
-        if not model_name or model_name in {OLLAMA_MODEL, "gemini-2.5-flash", "models/gemini-2.5-flash"}:
+        """Resolve and normalize Gemini model names, migrating deprecated 2.5 or invalid models to modern supported versions."""
+        fallback = DEFAULT_GEMINI_MODEL or "gemini-2.0-flash"
+        if not model_name or model_name in {OLLAMA_MODEL, "gemini-2.5-flash", "models/gemini-2.5-flash", "gemini-3.8-flash"}:
             return fallback
         clean = model_name.strip()
         if clean.startswith("models/"):
             clean = clean[len("models/"):]
-        if clean == "gemini-2.5-flash" or clean.startswith("gemini-2.5"):
+        if clean in {"gemini-2.5-flash", "gemini-3.8-flash"} or clean.startswith("gemini-2.5"):
             return fallback
         return clean
 
@@ -33,35 +33,31 @@ class LLMService:
         client: Any,
         primary_model: Optional[str],
         contents: Any,
-        max_retries_per_model: int = 2
+        max_retries_per_model: int = 1
     ) -> Tuple[Any, str]:
-        """Call Gemini generate_content with backoff retry on transient errors (503/429)
-        and automatic failover to alternative supported Gemini models.
-        """
+        """Call Gemini generate_content with immediate failover to supported fallback models."""
         primary = LLMService.resolve_gemini_model(primary_model)
         candidates = [primary]
-        for fallback in ["gemini-2.0-flash", "gemini-1.5-flash", "gemini-2.5-flash-latest"]:
+        for fallback in ["gemini-1.5-flash", "gemini-2.0-flash"]:
             if fallback not in candidates:
                 candidates.append(fallback)
 
         last_error = None
         for model in candidates:
-            for attempt in range(max_retries_per_model + 1):
-                try:
-                    res = client.models.generate_content(
-                        model=model,
-                        contents=contents
-                    )
-                    return res, model
-                except Exception as e:
-                    last_error = e
-                    err_str = str(e).lower()
-                    is_transient = any(kw in err_str for kw in ["503", "unavailable", "high demand", "429", "resource_exhausted"])
-                    if is_transient and attempt < max_retries_per_model:
-                        time.sleep(1.0 * (attempt + 1))
-                        continue
-                    # Try next candidate model on non-retryable error or exhausted attempts
-                    break
+            try:
+                res = client.models.generate_content(
+                    model=model,
+                    contents=contents
+                )
+                return res, model
+            except Exception as e:
+                last_error = e
+                err_str = str(e).lower()
+                is_transient = any(kw in err_str for kw in ["503", "unavailable", "high demand", "429", "resource_exhausted", "not found", "404"])
+                if is_transient:
+                    # Immediately failover to next model in cascade without delaying
+                    continue
+                break
         if last_error:
             raise last_error
         raise RuntimeError("No response from Gemini candidate models.")
@@ -80,7 +76,9 @@ class LLMService:
                 model=self.model_name,
                 base_url=self.base_url,
                 temperature=0.1,
-                timeout=45,
+                timeout=30,
+                num_ctx=2048,
+                num_predict=256,
                 keep_alive="10m",
             )
         elif self.provider == "openai" and self.api_key:
@@ -96,7 +94,10 @@ class LLMService:
             return ChatOllama(
                 model=self.model_name,
                 base_url=self.base_url,
-                temperature=0.1
+                temperature=0.1,
+                timeout=30,
+                num_ctx=2048,
+                num_predict=256,
             )
 
     @staticmethod
@@ -184,7 +185,9 @@ class LLMService:
                     base_url=self.base_url,
                     temperature=0.1,
                     format="json",
-                    timeout=60,
+                    timeout=45,
+                    num_ctx=2048,
+                    num_predict=512,
                     keep_alive="10m",
                 )
                 
