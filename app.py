@@ -1,6 +1,13 @@
 import sys
 import os
 
+# Linux / Streamlit Community Cloud modern SQLite shim for ChromaDB
+try:
+    __import__('pysqlite3')
+    sys.modules['sqlite3'] = sys.modules.pop('pysqlite3')
+except Exception:
+    pass
+
 # Suppress tqdm / transformers progress bars that cause Errno 5 on detached stderr
 os.environ["HF_HUB_DISABLE_PROGRESS_BARS"] = "1"
 os.environ["TOKENIZERS_PARALLELISM"] = "false"

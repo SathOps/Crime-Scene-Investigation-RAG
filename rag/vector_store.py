@@ -28,14 +28,38 @@ class VectorStoreManager:
             self._init_chroma()
 
     def _init_chroma(self):
-        self.client = chromadb.PersistentClient(
-            path=str(self.persistent_dir),
-            settings=Settings(allow_reset=True, anonymized_telemetry=False),
-        )
-        self.collection = self.client.get_or_create_collection(
-            name=self.collection_name,
-            metadata={"hnsw:space": "cosine"},
-        )
+        try:
+            from chromadb.api.client import SharedSystemClient
+            SharedSystemClient.clear_system_cache()
+        except Exception:
+            pass
+
+        try:
+            self.client = chromadb.PersistentClient(
+                path=str(self.persistent_dir),
+                settings=Settings(allow_reset=True, anonymized_telemetry=False),
+            )
+            self.collection = self.client.get_or_create_collection(
+                name=self.collection_name,
+                metadata={"hnsw:space": "cosine"},
+            )
+        except Exception as exc:
+            import logging
+            logging.getLogger("VectorStore").warning(
+                f"Chroma PersistentClient initialization failed ({exc}). Falling back to EphemeralClient."
+            )
+            try:
+                from chromadb.api.client import SharedSystemClient
+                SharedSystemClient.clear_system_cache()
+            except Exception:
+                pass
+            self.client = chromadb.EphemeralClient(
+                settings=Settings(allow_reset=True, anonymized_telemetry=False)
+            )
+            self.collection = self.client.get_or_create_collection(
+                name=self.collection_name,
+                metadata={"hnsw:space": "cosine"},
+            )
 
     def _init_faiss(self):
         try:

@@ -138,3 +138,4 @@ websockets==15.0.1
 xxhash==4.0.0
 yarl==1.24.5
 zstandard==0.25.0
+pysqlite3-binary
