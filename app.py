@@ -1727,9 +1727,21 @@ if "embedding_provider" not in st.session_state:
 if "api_key" not in st.session_state:
     st.session_state.api_key = GEMINI_API_KEY or OPENAI_API_KEY
 if "llm_provider" not in st.session_state:
-    st.session_state.llm_provider = DEFAULT_LLM_PROVIDER
+    if DEFAULT_LLM_PROVIDER == "ollama":
+        is_ollama_alive, _ = LLMService.check_ollama_status(OLLAMA_MODEL)
+        st.session_state.llm_provider = "ollama" if is_ollama_alive else ("gemini" if GEMINI_API_KEY else "local")
+    else:
+        st.session_state.llm_provider = DEFAULT_LLM_PROVIDER
+
 if "llm_model" not in st.session_state:
-    st.session_state.llm_model = DEFAULT_GEMINI_MODEL if DEFAULT_LLM_PROVIDER == "gemini" else OLLAMA_MODEL
+    if st.session_state.llm_provider == "gemini":
+        st.session_state.llm_model = DEFAULT_GEMINI_MODEL
+    elif st.session_state.llm_provider == "openai":
+        st.session_state.llm_model = "gpt-4o-mini"
+    elif st.session_state.llm_provider == "ollama":
+        st.session_state.llm_model = OLLAMA_MODEL
+    else:
+        st.session_state.llm_model = "local-rag-fallback"
 
 # Automatically migrate deprecated or non-existent models from existing browser session
 if st.session_state.get("llm_model") in ["gemini-2.5-flash", "models/gemini-2.5-flash", "gemini-3.8-flash", "models/gemini-3.8-flash"]:
@@ -1755,6 +1767,20 @@ llm_service = LLMService(
 )
 agent = LegalResearchAgent(retriever, llm_service)
 stats = st.session_state.vector_store.get_stats()
+
+# Auto-populate sample case documents if the knowledge base is empty on first launch
+if stats.get("total_chunks", 0) == 0:
+    try:
+        sample_files = sorted(list(SAMPLE_DATA_DIR.glob("*.txt")))
+        if sample_files:
+            splitter = LegalTextSplitter(chunk_size=DEFAULT_CHUNK_SIZE, chunk_overlap=DEFAULT_CHUNK_OVERLAP)
+            for sf in sample_files:
+                pages_data = DocumentLoader.load_file(sf, sf.name)
+                chunks = splitter.split_pages(pages_data)
+                st.session_state.vector_store.add_chunks(chunks, embedding_service)
+            stats = st.session_state.vector_store.get_stats()
+    except Exception:
+        pass
 
 # ─────────────────────────────────────────────
 # SIDEBAR — NAVIGATION & CONTROLS
@@ -1844,7 +1870,7 @@ with st.sidebar:
             if is_alive:
                 st.caption(f"✓ {ollama_msg} (Context capped at 2k to prevent heating)")
             else:
-                st.caption(f"⚠️ {ollama_msg} — Switch to 'local' for instant heat-free RAG")
+                st.caption(f"⚠️ {ollama_msg} — Switch to 'gemini' or 'local' on Streamlit Cloud")
     elif provider_choice == "gemini":
         gemini_model_options = [
             "gemini-2.0-flash",

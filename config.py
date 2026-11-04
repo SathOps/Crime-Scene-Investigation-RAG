@@ -41,6 +41,30 @@ def _clean_env_key(val: str) -> str:
         return ""
     return cleaned
 
-# API Keys
-GEMINI_API_KEY = _clean_env_key(os.getenv("GEMINI_API_KEY", os.getenv("GOOGLE_API_KEY", "")))
-OPENAI_API_KEY = _clean_env_key(os.getenv("OPENAI_API_KEY", ""))
+def _get_secret_or_env(key: str, default: str = "") -> str:
+    # 1. Try environment variable
+    val = os.getenv(key, "")
+    if not val:
+        # 2. Try Streamlit secrets if running on Streamlit Community Cloud
+        try:
+            import streamlit as st
+            if hasattr(st, "secrets") and key in st.secrets:
+                val = str(st.secrets[key])
+        except Exception:
+            pass
+    return _clean_env_key(val) or default
+
+# API Keys (support both local .env and Streamlit Community Cloud secrets)
+GEMINI_API_KEY = _get_secret_or_env("GEMINI_API_KEY", _get_secret_or_env("GOOGLE_API_KEY", ""))
+OPENAI_API_KEY = _get_secret_or_env("OPENAI_API_KEY", "")
+
+# Default LLM Provider: auto-detect best provider based on available keys or local daemon
+_explicit_provider = _get_secret_or_env("LLM_PROVIDER", "")
+if _explicit_provider:
+    DEFAULT_LLM_PROVIDER = _explicit_provider.lower()
+elif GEMINI_API_KEY:
+    DEFAULT_LLM_PROVIDER = "gemini"
+elif OPENAI_API_KEY:
+    DEFAULT_LLM_PROVIDER = "openai"
+else:
+    DEFAULT_LLM_PROVIDER = "ollama"
