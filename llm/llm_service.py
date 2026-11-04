@@ -44,6 +44,7 @@ class LLMService:
 
         # 2. Dynamic Model Discovery via client.models.list()
         discovered: List[str] = []
+        non_text_patterns = ["tts", "audio", "embed", "imagen", "image", "vision-preview", "realtime", "live"]
         try:
             if hasattr(client, "models") and hasattr(client.models, "list"):
                 for m in client.models.list():
@@ -51,13 +52,15 @@ class LLMService:
                     name = getattr(m, "name", "")
                     if (not actions or "generateContent" in actions or any("generate" in str(a).lower() for a in actions)) and name:
                         clean_name = name[7:] if name.startswith("models/") else name
+                        if any(bad in clean_name.lower() for bad in non_text_patterns):
+                            continue
                         discovered.append(clean_name)
         except Exception:
             discovered = []
 
         # 3. Build comprehensive candidate cascade
         candidates: List[str] = []
-        if primary:
+        if primary and not any(bad in primary.lower() for bad in non_text_patterns):
             candidates.append(primary)
             if primary == "gemini-1.5-flash" and "gemini-1.5-flash-latest" not in candidates:
                 candidates.append("gemini-1.5-flash-latest")
@@ -75,13 +78,13 @@ class LLMService:
             "gemini-2.0-pro-exp",
         ]
 
-        # Prioritize discovered models first if available
+        # Prioritize discovered text models first if available
         if discovered:
             for pm in priority_models:
                 if pm in discovered and pm not in candidates:
                     candidates.append(pm)
             for d in discovered:
-                if d not in candidates and "gemini" in d.lower():
+                if d not in candidates and "gemini" in d.lower() and not any(bad in d.lower() for bad in non_text_patterns):
                     candidates.append(d)
 
         # Append remaining curated fallback models
@@ -129,7 +132,9 @@ class LLMService:
                             kw in err_str for kw in [
                                 "503", "unavailable", "high demand", "429",
                                 "resource_exhausted", "not found", "404",
-                                "is not found for api version"
+                                "is not found for api version",
+                                "response modalities", "not supported by the model",
+                                "modalities (text) is not supported"
                             ]
                         )
                         if is_transient:

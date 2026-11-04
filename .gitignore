@@ -13,7 +13,8 @@ data/documents/*
 !data/documents/.gitkeep
 
 # Streamlit
-.streamlit/
+.streamlit/*
+!.streamlit/config.toml
 
 # OS specific
 .DS_Store

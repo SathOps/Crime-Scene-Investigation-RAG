@@ -70,3 +70,33 @@ def test_gemini_multi_error_cascade():
     assert "gemini-2.0-flash" in attempted
     assert "gemini-2.0-flash-exp" in attempted
 
+def test_gemini_filters_non_text_models_and_handles_modality_mismatch():
+    """Verify that TTS, audio, and imagen models are filtered out from candidates and modality errors failover."""
+    mock_client = MagicMock()
+    mock_client.models.list.return_value = [
+        Model(name="models/gemini-2.5-flash-preview-tts", supported_actions=["generateContent"]),
+        Model(name="models/imagen-3.0-generate-002", supported_actions=["generateContent"]),
+        Model(name="models/gemini-2.0-flash", supported_actions=["generateContent"]),
+    ]
+
+    attempted = []
+    def mock_generate(model, contents):
+        attempted.append(model)
+        if "tts" in model:
+            raise Exception("400: The requested combination of response modalities (TEXT) is not supported by the model.")
+        resp = MagicMock()
+        resp.text = "Success from text model"
+        return resp
+
+    mock_client.models.generate_content.side_effect = mock_generate
+
+    res, used_model = LLMService._call_gemini_with_fallback_and_retry(
+        client=mock_client,
+        primary_model="gemini-2.0-flash",
+        contents="Analyze evidence"
+    )
+
+    assert "gemini-2.5-flash-preview-tts" not in attempted
+    assert used_model == "gemini-2.0-flash"
+    assert res.text == "Success from text model"
+
